@@ -526,7 +526,7 @@ slope of 0.2 for discriminator and classiﬁer; and (vii) weights randomly initi
 distribution N (0, 0.02I) and zero biases. We refer to Appendix C for detailed model architectures
 and additional experimental results.
 
-5.1 SYNTHETIC DATAp
+5.1 SYNTHETIC DATA
 
 In the ﬁrst experiment, following (Nguyen et al., 2017) we reuse the experimental design proposed
 in (Metz et al., 2016) to investigate how well our MGAN can explore and capture multiple data
