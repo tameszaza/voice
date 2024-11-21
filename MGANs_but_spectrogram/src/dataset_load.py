@@ -50,3 +50,36 @@ def librispeech_to_mel(root_dir, target_sr=16000, n_mels=64, n_fft=1024, hop_len
     # Stack into a single tensor
     mel_spectrograms = torch.stack(mel_spectrograms)  # Shape: [num_samples, 1, n_mels, target_length]
     return TensorDataset(mel_spectrograms)
+import matplotlib.pyplot as plt
+import os
+
+def save_mel_spectrograms(dataset, save_dir, num_to_visualize=5):
+    """
+    Visualize and save the first 'num_to_visualize' Mel spectrograms in the dataset.
+    
+    Args:
+    - dataset: TensorDataset containing Mel spectrograms.
+    - save_dir: Directory where the images will be saved.
+    - num_to_visualize: Number of spectrograms to visualize and save.
+    """
+    # Create the save directory if it does not exist
+    os.makedirs(save_dir, exist_ok=True)
+    
+    for i in range(min(num_to_visualize, len(dataset))):
+        # Extract Mel spectrogram from dataset
+        mel_spec = dataset[i][0].squeeze(0).numpy()  # Remove channel dimension
+        
+        # Plot the Mel spectrogram
+        plt.figure(figsize=(10, 4))
+        plt.imshow(mel_spec, aspect='auto', origin='lower', cmap='viridis')
+        plt.title(f'Mel Spectrogram {i + 1}')
+        plt.xlabel('Time Frames')
+        plt.ylabel('Mel Bands')
+        plt.colorbar(format='%+2.0f dB')
+        
+        # Save the plot
+        save_path = os.path.join(save_dir, f'mel_spectrogram_{i + 1}.png')
+        plt.savefig(save_path)
+        plt.close()
+        print(f"Saved: {save_path}")
+
