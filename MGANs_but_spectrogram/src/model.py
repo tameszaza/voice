@@ -5,6 +5,7 @@ import torchvision.utils as vutils
 import matplotlib.pyplot as plt
 import numpy as np
 import glob
+import os
 
 # Set random seed for reproducibility
 manualSeed = 6789
@@ -14,26 +15,23 @@ if torch.cuda.is_available():
     torch.cuda.manual_seed_all(manualSeed)
 
 # Generator shared layers
+# Generator shared layers
 class GeneratorSharedLayers(nn.Module):
     def __init__(self, ngf, nc, mel_bins, time_frames):
         super(GeneratorSharedLayers, self).__init__()
         self.main = nn.Sequential(
             # Input: (ngf * 8, mel_bins // 8, time_frames // 8)
-            nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False),
+            nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False),  # Upsample to (mel_bins // 4, time_frames // 4)
             nn.BatchNorm2d(ngf * 4),
             nn.ReLU(True),
-            # State: (ngf * 4, mel_bins // 4, time_frames // 4)
-            nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False),
+            nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False),  # Upsample to (mel_bins // 2, time_frames // 2)
             nn.BatchNorm2d(ngf * 2),
             nn.ReLU(True),
-            # State: (ngf * 2, mel_bins // 2, time_frames // 2)
-            nn.ConvTranspose2d(ngf * 2, ngf, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(ngf),
-            nn.ReLU(True),
-            # State: (ngf, mel_bins, time_frames)
-            nn.ConvTranspose2d(ngf, nc, 4, 2, 1, bias=False),
+            nn.ConvTranspose2d(ngf * 2, nc, 4, 2, 1, bias=False),       # Upsample to (mel_bins, time_frames)
             nn.Tanh()
         )
+
+
 
 
     def forward(self, input):
@@ -53,7 +51,6 @@ class Generator(nn.Module):
         )
         self.shared_layers = shared_layers
 
-
     def forward(self, input):
         x = self.input_layer(input)
         x = x.view(-1, self.ngf * 8, self.mel_bins // 8, self.time_frames // 8)
@@ -61,52 +58,59 @@ class Generator(nn.Module):
         return x
 
 
+
+# Discriminator shared layers
 # Discriminator shared layers
 class DiscriminatorSharedLayers(nn.Module):
     def __init__(self, ndf, nc):
         super(DiscriminatorSharedLayers, self).__init__()
         self.main = nn.Sequential(
             # Input: (nc, mel_bins, time_frames)
-            nn.Conv2d(nc, ndf, 4, 2, 1, bias=False),
+            nn.Conv2d(nc, ndf, 4, 2, 1, bias=False),          # Output: (ndf, 32, 64)
             nn.BatchNorm2d(ndf),
             nn.LeakyReLU(0.2, inplace=True),
-            # State: (ndf, mel_bins // 2, time_frames // 2)
-            nn.Conv2d(ndf, ndf * 2, 4, 2, 1, bias=False),
+            nn.Conv2d(ndf, ndf * 2, 4, 2, 1, bias=False),     # Output: (ndf*2, 16, 32)
             nn.BatchNorm2d(ndf * 2),
             nn.LeakyReLU(0.2, inplace=True),
-            # State: (ndf * 2, mel_bins // 4, time_frames // 4)
-            nn.Conv2d(ndf * 2, ndf * 4, 4, 2, 1, bias=False),
+            nn.Conv2d(ndf * 2, ndf * 4, 4, 2, 1, bias=False), # Output: (ndf*4, 8, 16)
             nn.BatchNorm2d(ndf * 4),
             nn.LeakyReLU(0.2, inplace=True),
-            # State: (ndf * 4, mel_bins // 8, time_frames // 8)
-            nn.Conv2d(ndf * 4, ndf * 8, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(ndf * 8),
-            nn.LeakyReLU(0.2, inplace=True),
-            # State: (ndf * 8, mel_bins // 16, time_frames // 16)
         )
+
+
 
     def forward(self, input):
         return self.main(input)
-
-# Discriminator with shared layers and unique output layers
+    
 class Discriminator(nn.Module):
     def __init__(self, ndf, nc, shared_layers, num_gens, mel_bins, time_frames):
         super(Discriminator, self).__init__()
         self.shared_layers = shared_layers
+        self.num_gens = num_gens
+
+        # The spatial dimensions after the shared layers are (8, 16)
         self.output_bin = nn.Sequential(
-            nn.Conv2d(ndf * 8, 1, 4, 1, 0, bias=False),
+            nn.Conv2d(ndf * 4, 1, kernel_size=(8, 16), stride=1, padding=0, bias=False),
             nn.Sigmoid()
         )
         self.output_mul = nn.Sequential(
-            nn.Conv2d(ndf * 8, num_gens, 4, 1, 0, bias=False)
+            nn.Conv2d(ndf * 4, num_gens, kernel_size=(8, 16), stride=1, padding=0, bias=False)
         )
-
 
     def forward(self, input):
         x = self.shared_layers(input)
-        output_bin = self.output_bin(x).view(-1, 1).squeeze(1)
-        output_mul = self.output_mul(x).squeeze()
+        # x has shape: (batch_size, ndf*4, 8, 16)
+
+        # Apply output layers
+        output_bin = self.output_bin(x)  # Shape: (batch_size, 1, 1, 1)
+        output_bin = output_bin.view(-1)  # Shape: (batch_size,)
+
+        output_mul = self.output_mul(x)  # Shape: (batch_size, num_gens, 1, 1)
+        output_mul = output_mul.view(-1, self.num_gens)  # Shape: (batch_size, num_gens)
+
         return output_bin, output_mul
+
+
 
 # MGAN class encapsulating the training loop
 class MGAN:
