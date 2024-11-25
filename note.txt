@@ -4,3 +4,4 @@ since mim gan each generator learn from different aspect of data (totally and di
 so mim gan is more suitable for mnist dataset which data in different class can totally distinct from each other 
 but MGOGAN that use only orthogonal vector to maximize distant between each generator can generate intemidiat information
 MGO GAN might more suitable for our work since voice data distribution is continuous not discrete
+for mGANs 3 on mnist dataset can run successfull on seed 6789 but fail in seed 1234 so we shouludn't use this model
