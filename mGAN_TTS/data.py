@@ -269,7 +269,7 @@ def write_metadata(metadata, out_dir):
 
 if __name__ == '__main__':
     # Define parameters
-    wav_dir = r"D:\FINALPROJ\voice\data\LibriSpeech\dev-clean"  # Replace with your .flac files directory
+    wav_dir = r"data/LibriSpeech/LibriSpeech/dev-clean"  # Replace with your .flac files directory
     output = "processed_data"  # Replace with your desired output directory
     num_workers = cpu_count()  # Utilize all available CPU cores
     target_sr = 16000  # Target sample rate
