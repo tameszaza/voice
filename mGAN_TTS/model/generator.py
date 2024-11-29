@@ -1,6 +1,6 @@
 import torch.nn as nn
 from torch.nn.utils import spectral_norm
-from ..modules import Conv1d
+from .modules import Conv1d
 
 class Generator(nn.Module):
     def __init__(self,
