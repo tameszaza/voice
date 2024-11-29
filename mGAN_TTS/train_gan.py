@@ -18,28 +18,19 @@ import glob
 
 
 class FlacDataset(Dataset):
-    def __init__(self, data_dir, target_sr=16000, fragment_duration=4.0, 
-                 n_fft=2048, hop_length=512, n_mels=128, max_len=128):
+    def __init__(self, data_dir, target_sr=16000, fragment_duration=4.0):
         """
-        Dataset to handle audio files and convert them to fixed-size Mel spectrograms.
+        Dataset to handle audio files and return fixed-length audio waveforms.
         Args:
             data_dir (str): Directory containing audio files (.flac or .wav).
             target_sr (int): Target sampling rate for audio.
             fragment_duration (float): Duration (in seconds) for each audio fragment.
-            n_fft (int): Number of FFT components for Mel spectrogram.
-            hop_length (int): Number of samples between successive frames.
-            n_mels (int): Number of Mel bands.
-            max_len (int): Maximum number of frames in Mel spectrograms.
         """
         self.data_dir = data_dir
         self.target_sr = target_sr
         self.fragment_duration = fragment_duration
-        self.n_fft = n_fft
-        self.hop_length = hop_length
-        self.n_mels = n_mels
-        self.max_len = max_len
+        self.fragment_samples = int(self.fragment_duration * self.target_sr)
         self.audio_fragments = []
-
         self._load_files()
 
     def _load_files(self):
@@ -55,7 +46,7 @@ class FlacDataset(Dataset):
 
         print(f"Found {len(audio_files)} audio files.")
 
-        fragment_samples = int(self.fragment_duration * self.target_sr)
+        fragment_samples = self.fragment_samples
         current_audio = []  # Buffer to hold concatenated audio
 
         for file_path in audio_files:
@@ -95,32 +86,11 @@ class FlacDataset(Dataset):
         # Normalize audio to [-1, 1]
         audio = audio / np.max(np.abs(audio) + 1e-9)  # Added epsilon to prevent division by zero
 
-        # Compute the Mel spectrogram
-        mel_spec = librosa.feature.melspectrogram(
-            y=audio,
-            sr=self.target_sr,
-            n_fft=self.n_fft,
-            hop_length=self.hop_length,
-            n_mels=self.n_mels
-        )
-
-        # Convert power spectrogram (amplitude squared) to decibel (dB) units
-        mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
-
-        # Normalize Mel spectrogram to [0, 1]
-        mel_spec_norm = (mel_spec_db + 80) / 80  # Assuming min dB is -80
-
-        # Pad or truncate to fixed length
-        if mel_spec_norm.shape[1] < self.max_len:
-            pad_width = self.max_len - mel_spec_norm.shape[1]
-            mel_spec_norm = np.pad(mel_spec_norm, ((0, 0), (0, pad_width)), mode='constant')
-        else:
-            mel_spec_norm = mel_spec_norm[:, :self.max_len]
-
         # Convert to PyTorch tensor and add channel dimension
-        mel_spec_tensor = torch.tensor(mel_spec_norm, dtype=torch.float32).unsqueeze(0)
+        audio_tensor = torch.tensor(audio, dtype=torch.float32).unsqueeze(0)  # Shape [1, fragment_samples]
 
-        return mel_spec_tensor
+        return audio_tensor
+
 
 # ------------------ Rest of the Code Remains the Same ------------------
 
@@ -139,13 +109,15 @@ class Conv1d(nn.Conv1d):
         nn.init.kaiming_normal_(self.weight)
 
 class Generator(nn.Module):
-    def __init__(self, z_channels=128, out_channels=1, seq_length=128):
+    def __init__(self, z_channels=128, out_channels=1, seq_length=64000):
         super(Generator, self).__init__()
 
         self.z_channels = z_channels
         self.seq_length = seq_length
 
-        self.fc = nn.Linear(z_channels, 768 * seq_length)
+        # Calculate initial sequence length after the fully connected layer
+        initial_seq_length = seq_length // (2 ** 4)  # Assuming 4 GBlocks with stride=2
+        self.fc = nn.Linear(z_channels, 768 * initial_seq_length)
         self.gblocks = nn.Sequential(
             GBlock(768, 768),
             GBlock(768, 384),
@@ -159,12 +131,12 @@ class Generator(nn.Module):
 
     def forward(self, z):
         batch_size = z.size(0)
-        # Project and reshape
         x = self.fc(z)
-        x = x.view(batch_size, 768, self.seq_length)
+        x = x.view(batch_size, 768, self.seq_length // (2 ** 4))
         x = self.gblocks(x)
         x = self.postprocess(x)
         return x
+
 
 class GBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -290,6 +262,32 @@ def visualize_generated_mel_spectrograms(generators, z_dim, num_samples, device,
                 plt.savefig(os.path.join(output_dir, f'epoch{epoch}_gen{idx+1}_sample{i+1}.png'))
                 plt.close()
         gen.train()
+def visualize_generated_audio(generators, num_samples, device, epoch, output_dir):
+    os.makedirs(output_dir, exist_ok=True)
+    for idx, gen in enumerate(generators):
+        gen.eval()
+        with torch.no_grad():
+            noise = generate_noise(num_samples, gen.z_channels, device)
+            fake_audio = gen(z=noise).cpu().numpy()
+            for i in range(num_samples):
+                audio = fake_audio[i][0]  # Shape [length]
+
+                # Generate Mel spectrogram for visualization
+                mel_spec = librosa.feature.melspectrogram(y=audio, sr=16000, n_mels=128)
+                mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
+
+                plt.figure(figsize=(10, 4))
+                librosa.display.specshow(
+                    mel_spec_db, sr=16000, hop_length=512,
+                    x_axis='time', y_axis='mel'
+                )
+                plt.colorbar(format='%+2.0f dB')
+                plt.title(f'Epoch {epoch} Generator {idx+1} Sample {i+1}')
+                plt.tight_layout()
+                plt.savefig(os.path.join(output_dir, f'epoch{epoch}_gen{idx+1}_sample{i+1}.png'))
+                plt.close()
+        gen.train()
+
 
 def pretrain_single_generator(num_epochs, z_dim, lr_gen, lr_disc, batch_size, seed, dataset, output_dir):
     set_seed(seed)
@@ -507,15 +505,19 @@ def train_gan_with_pretrained_generators(
 
 if __name__ == '__main__':
     # Define your data directory
-    data_dir = 'data/LibriSpeech/LibriSpeech/dev-clean'# Replace with your actual data path
+    data_dir = 'data/LibriSpeech/LibriSpeech/dev-clean'  # Replace with your actual data path
 
     # Initialize your dataset
+    fragment_duration = 4.0  # Duration in seconds
+    target_sr = 16000
     dataset = FlacDataset(
         data_dir=data_dir,
-        target_sr=16000,
-        n_mels=128,
-        hop_length=256
+        target_sr=target_sr,
+        fragment_duration=fragment_duration
     )
+
+    # Calculate sequence length based on fragment duration and sampling rate
+    seq_length = int(fragment_duration * target_sr)
 
     # Pretrain the generator
     pretrained_generator = pretrain_single_generator(
@@ -526,7 +528,8 @@ if __name__ == '__main__':
         batch_size=16,        # Adjust batch size based on your system's capability
         seed=1234,
         dataset=dataset,
-        output_dir='pretrain_outputsCNN'
+        output_dir='pretrain_outputsCNN',
+        seq_length=seq_length  # Pass the sequence length
     )
 
     # Train multiple generators
@@ -541,5 +544,6 @@ if __name__ == '__main__':
         seed=1234,
         dataset=dataset,
         output_dir='multi_gen_outputs_CNN',
-        lambda_ortho=0.05
+        lambda_ortho=0.05,
+        seq_length=seq_length  # Pass the sequence length
     )
