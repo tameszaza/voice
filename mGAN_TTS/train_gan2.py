@@ -1,4 +1,4 @@
-# Filename: train_gan_with_preprocessing.py
+# Filename: train_gan.py
 
 import os
 import random
@@ -10,132 +10,94 @@ from torch.utils.data import DataLoader, Dataset
 import librosa
 import matplotlib.pyplot as plt
 import librosa.display
-from concurrent.futures import ProcessPoolExecutor
-from functools import partial
-from tqdm import tqdm
-import pickle
 import glob
+# ------------------ Dataset Class ------------------
 
-# ------------------ Data Preprocessing ------------------
-
-def find_files(path, pattern="*.wav"):
-    filenames = []
-    for filename in glob.iglob(f'{path}/**/{pattern}', recursive=True):
-        filenames.append(filename)
-    return filenames
-
-def convert_audio(wav_file, target_sr=16000, n_fft=1024, hop_length=256, n_mels=80):
-    y, sr = librosa.load(wav_file, sr=target_sr)
-    y = y / np.max(np.abs(y) + 1e-9)  # Normalize audio
-    mel_spectrogram = librosa.feature.melspectrogram(
-        y=y, sr=sr, n_fft=n_fft, hop_length=hop_length, n_mels=n_mels
-    )
-    mel_spectrogram = librosa.power_to_db(mel_spectrogram, ref=np.max)
-    # Normalize Mel spectrogram to [0, 1]
-    mel_spectrogram = (mel_spectrogram + 80) / 80
-    return mel_spectrogram, y
-
-def data_prepare(audio_path, mel_path, wav_file):
-    mel, audio = convert_audio(wav_file)
-    np.save(audio_path, audio, allow_pickle=False)
-    np.save(mel_path, mel, allow_pickle=False)
-    return audio_path, mel_path, mel.shape[1]  # Use mel.shape[1] for the number of frames
-
-def process_data(output_dir, wav_files, train_dir, test_dir, num_workers, train_rate=0.95):
-    executor = ProcessPoolExecutor(max_workers=num_workers)
-    results = []
-    names = []
-
-    random.shuffle(wav_files)
-    train_num = int(len(wav_files) * train_rate)
-
-    # Process training files
-    for wav_file in wav_files[:train_num]:
-        fid = os.path.basename(wav_file).replace('.wav', '.npy')
-        names.append(fid)
-        results.append(executor.submit(partial(
-            data_prepare,
-            os.path.join(train_dir, "audio", fid),
-            os.path.join(train_dir, "mel", fid),
-            wav_file
-        )))
-
-    with open(os.path.join(output_dir, "train", 'names.pkl'), 'wb') as f:
-        pickle.dump(names, f)
-
-    names = []
-    # Process testing files
-    for wav_file in wav_files[train_num:]:
-        fid = os.path.basename(wav_file).replace('.wav', '.npy')
-        names.append(fid)
-        results.append(executor.submit(partial(
-            data_prepare,
-            os.path.join(test_dir, "audio", fid),
-            os.path.join(test_dir, "mel", fid),
-            wav_file
-        )))
-
-    with open(os.path.join(output_dir, "test", 'names.pkl'), 'wb') as f:
-        pickle.dump(names, f)
-
-    return [result.result() for result in tqdm(results)]
-
-def write_metadata(metadata, out_dir):
-    frames = sum([m[2] for m in metadata])
-    hours = frames * 256 / 16000 / 3600  # Assuming hop_length=256 and sr=16000
-    print('Wrote %d utterances, %d frames (%.2f hours)' % (len(metadata), frames, hours))
-
-def preprocess_data(wav_dir, output_dir, num_workers=4):
-    train_dir = os.path.join(output_dir, 'train')
-    test_dir = os.path.join(output_dir, 'test')
-    os.makedirs(output_dir, exist_ok=True)
-    os.makedirs(train_dir, exist_ok=True)
-    os.makedirs(test_dir, exist_ok=True)
-    os.makedirs(os.path.join(train_dir, "audio"), exist_ok=True)
-    os.makedirs(os.path.join(train_dir, "mel"), exist_ok=True)
-    os.makedirs(os.path.join(test_dir, "audio"), exist_ok=True)
-    os.makedirs(os.path.join(test_dir, "mel"), exist_ok=True)
-
-    wav_files = find_files(wav_dir, pattern="*.wav")
-    metadata = process_data(output_dir, wav_files, train_dir, test_dir, num_workers)
-    write_metadata(metadata, output_dir)
 
 # ------------------ Dataset Class ------------------
 
-class PreprocessedDataset(Dataset):
-    def __init__(self, data_dir, data_type='mel', seq_len=128):
+
+class FlacDataset(Dataset):
+    def __init__(self, data_dir, target_sr=16000, fragment_duration=4.0):
         """
+        Dataset to handle audio files and return fixed-length audio waveforms.
         Args:
-            data_dir (str): Path to the directory containing preprocessed data.
-            data_type (str): 'mel' or 'audio' to specify which data to load.
-            seq_len (int): Sequence length for data truncation or padding.
+            data_dir (str): Directory containing audio files (.flac or .wav).
+            target_sr (int): Target sampling rate for audio.
+            fragment_duration (float): Duration (in seconds) for each audio fragment.
         """
-        self.data_paths = glob.glob(os.path.join(data_dir, data_type, '*.npy'))
-        self.data_paths.sort()
-        self.seq_len = seq_len
+        self.data_dir = data_dir
+        self.target_sr = target_sr
+        self.fragment_duration = fragment_duration
+        self.fragment_samples = int(self.fragment_duration * self.target_sr)
+        self.audio_fragments = []
+        self._load_files()
+
+    def _load_files(self):
+        # Gather all audio files (both .flac and .wav)
+        audio_files = []
+        for root, _, files in os.walk(self.data_dir):
+            for file in files:
+                if file.endswith('.flac') or file.endswith('.wav'):
+                    audio_files.append(os.path.join(root, file))
+
+        if not audio_files:
+            raise ValueError(f"No audio files found in directory: {self.data_dir}")
+
+        print(f"Found {len(audio_files)} audio files.")
+
+        fragment_samples = self.fragment_samples
+        current_audio = []  # Buffer to hold concatenated audio
+
+        for file_path in audio_files:
+            # Load each audio file
+            y, sr = librosa.load(file_path, sr=self.target_sr)
+            total_samples = len(y)
+            start = 0
+
+            while start < total_samples:
+                remaining_samples = total_samples - start
+                needed_samples = fragment_samples - len(current_audio)
+                take_samples = min(remaining_samples, needed_samples)
+                current_audio.extend(y[start:start + take_samples])
+                start += take_samples
+
+                if len(current_audio) == fragment_samples:
+                    # Save the current fragment
+                    self.audio_fragments.append(np.array(current_audio))
+                    current_audio = []
+
+        # Handle leftover buffer
+        if len(current_audio) > 0:
+            # Pad to make it a complete fragment if necessary
+            if len(current_audio) < fragment_samples:
+                current_audio.extend([0] * (fragment_samples - len(current_audio)))
+            self.audio_fragments.append(np.array(current_audio))
+
+        print(f"Generated {len(self.audio_fragments)} audio fragments.")
 
     def __len__(self):
-        return len(self.data_paths)
+        return len(self.audio_fragments)
 
     def __getitem__(self, idx):
-        data = np.load(self.data_paths[idx])
-        if len(data.shape) == 1:
-            # Audio waveform
-            if len(data) < self.seq_len:
-                padding = np.zeros(self.seq_len - len(data))
-                data = np.concatenate((data, padding))
-            else:
-                data = data[:self.seq_len]
-            data_tensor = torch.tensor(data, dtype=torch.float32).unsqueeze(0)
-        else:
-            # Mel spectrogram
-            if data.shape[1] < self.seq_len:
-                pad_width = self.seq_len - data.shape[1]
-                data = np.pad(data, ((0, 0), (0, pad_width)), mode='constant')
-            else:
-                data = data[:, :self.seq_len]
-            data_tensor = torch.tensor(data, dtype=torch.float32).unsqueeze(0)
-        return data_tensor
+        # Retrieve the audio fragment
+        audio = self.audio_fragments[idx]
+
+        # Normalize audio to [-1, 1]
+        audio = audio / np.max(np.abs(audio) + 1e-9)  # Added epsilon to prevent division by zero
+
+        # Convert to PyTorch tensor and add channel dimension
+        audio_tensor = torch.tensor(audio, dtype=torch.float32).unsqueeze(0)  # Shape [1, fragment_samples]
+
+        return audio_tensor
+
+
+# ------------------ Rest of the Code Remains the Same ------------------
+
+# The rest of your code (model definitions, training functions, etc.) remains unchanged.
+# Ensure you import any additional necessary libraries if they are used in your code.
+
+# ------------------ Main Execution ------------------
 
 # ------------------ Model Architecture ------------------
 
@@ -147,30 +109,34 @@ class Conv1d(nn.Conv1d):
         nn.init.kaiming_normal_(self.weight)
 
 class Generator(nn.Module):
-    def __init__(self, z_channels=128, out_channels=1, seq_length=128):
+    def __init__(self, z_channels=128, out_channels=1, seq_length=64000):
         super(Generator, self).__init__()
 
         self.z_channels = z_channels
         self.seq_length = seq_length
 
-        self.fc = nn.Linear(z_channels, 256 * (seq_length // 8))
+        # Calculate initial sequence length after the fully connected layer
+        initial_seq_length = seq_length // (2 ** 4)  # Assuming 4 GBlocks with stride=2
+        self.fc = nn.Linear(z_channels, 768 * initial_seq_length)
         self.gblocks = nn.Sequential(
-            GBlock(256, 128),
-            GBlock(128, 64),
-            GBlock(64, 32)
+            GBlock(768, 768),
+            GBlock(768, 384),
+            GBlock(384, 192),
+            GBlock(192, 96)
         )
         self.postprocess = nn.Sequential(
-            Conv1d(32, out_channels, kernel_size=3, padding=1),
+            Conv1d(96, out_channels, kernel_size=3, padding=1),
             nn.Tanh()
         )
 
     def forward(self, z):
         batch_size = z.size(0)
         x = self.fc(z)
-        x = x.view(batch_size, 256, self.seq_length // 8)
+        x = x.view(batch_size, 768, self.seq_length // (2 ** 4))
         x = self.gblocks(x)
         x = self.postprocess(x)
         return x
+
 
 class GBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -189,15 +155,15 @@ class Discriminator(nn.Module):
     def __init__(self, in_channels=1):
         super(Discriminator, self).__init__()
         self.model = nn.Sequential(
-            nn.Conv1d(in_channels, 32, kernel_size=4, stride=2, padding=1),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv1d(32, 64, kernel_size=4, stride=2, padding=1),
-            nn.BatchNorm1d(64),
+            nn.Conv1d(in_channels, 64, kernel_size=4, stride=2, padding=1),
             nn.LeakyReLU(0.2, inplace=True),
             nn.Conv1d(64, 128, kernel_size=4, stride=2, padding=1),
             nn.BatchNorm1d(128),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv1d(128, 1, kernel_size=4, stride=1, padding=0)
+            nn.Conv1d(128, 256, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm1d(256),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv1d(256, 1, kernel_size=4, stride=1, padding=0)
         )
 
     def forward(self, inputs):
@@ -209,17 +175,17 @@ class Encoder(nn.Module):
     def __init__(self, in_channels=1, z_dim=128):
         super(Encoder, self).__init__()
         self.model = nn.Sequential(
-            nn.Conv1d(in_channels, 32, kernel_size=4, stride=2, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv1d(32, 64, kernel_size=4, stride=2, padding=1),
-            nn.BatchNorm1d(64),
+            nn.Conv1d(in_channels, 64, kernel_size=4, stride=2, padding=1),
             nn.ReLU(inplace=True),
             nn.Conv1d(64, 128, kernel_size=4, stride=2, padding=1),
             nn.BatchNorm1d(128),
             nn.ReLU(inplace=True),
+            nn.Conv1d(128, 256, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm1d(256),
+            nn.ReLU(inplace=True),
             nn.AdaptiveAvgPool1d(1)
         )
-        self.fc = nn.Linear(128, z_dim)
+        self.fc = nn.Linear(256, z_dim)
 
     def forward(self, inputs):
         outputs = self.model(inputs)
@@ -274,7 +240,7 @@ def compute_gradient_penalty(discriminator, real_data, fake_data, device):
     gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
     return gradient_penalty
 
-def visualize_generated_audio(generators, z_dim, num_samples, device, epoch, output_dir, target_sr=16000):
+def visualize_generated_mel_spectrograms(generators, z_dim, num_samples, device, epoch, output_dir):
     os.makedirs(output_dir, exist_ok=True)
     for idx, gen in enumerate(generators):
         gen.eval()
@@ -282,32 +248,59 @@ def visualize_generated_audio(generators, z_dim, num_samples, device, epoch, out
             noise = generate_noise(num_samples, z_dim, device)
             fake = gen(z=noise).cpu().numpy()
             for i in range(num_samples):
-                audio = fake[i][0]  # Assuming shape [batch_size, 1, seq_length]
-                # Save the waveform as an audio file
-                audio_path = os.path.join(output_dir, f'epoch{epoch}_gen{idx+1}_sample{i+1}.wav')
-                librosa.output.write_wav(audio_path, audio, sr=target_sr)
+                mel_spec = fake[i][0]  # Assuming shape [batch_size, channels, n_mels, time_steps]
+                mel_spec_db = mel_spec * 80 - 80  # Convert back to dB scale
 
-                # Plot the waveform
                 plt.figure(figsize=(10, 4))
-                plt.plot(audio)
+                librosa.display.specshow(
+                    mel_spec_db, sr=16000, hop_length=256,
+                    x_axis='time', y_axis='mel'
+                )
+                plt.colorbar(format='%+2.0f dB')
+                plt.title(f'Epoch {epoch} Generator {idx+1} Sample {i+1}')
+                plt.tight_layout()
+                plt.savefig(os.path.join(output_dir, f'epoch{epoch}_gen{idx+1}_sample{i+1}.png'))
+                plt.close()
+        gen.train()
+def visualize_generated_audio(generators, num_samples, device, epoch, output_dir):
+    os.makedirs(output_dir, exist_ok=True)
+    for idx, gen in enumerate(generators):
+        gen.eval()
+        with torch.no_grad():
+            noise = generate_noise(num_samples, gen.z_channels, device)
+            fake_audio = gen(z=noise).cpu().numpy()
+            for i in range(num_samples):
+                audio = fake_audio[i][0]  # Shape [length]
+
+                # Generate Mel spectrogram for visualization
+                mel_spec = librosa.feature.melspectrogram(y=audio, sr=16000, n_mels=128)
+                mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
+
+                plt.figure(figsize=(10, 4))
+                librosa.display.specshow(
+                    mel_spec_db, sr=16000, hop_length=512,
+                    x_axis='time', y_axis='mel'
+                )
+                plt.colorbar(format='%+2.0f dB')
                 plt.title(f'Epoch {epoch} Generator {idx+1} Sample {i+1}')
                 plt.tight_layout()
                 plt.savefig(os.path.join(output_dir, f'epoch{epoch}_gen{idx+1}_sample{i+1}.png'))
                 plt.close()
         gen.train()
 
-def pretrain_single_generator(num_epochs, z_dim, lr_gen, lr_disc, batch_size, seed, dataset, output_dir):
+
+def pretrain_single_generator(num_epochs, z_dim, lr_gen, lr_disc, batch_size, seed, dataset, output_dir, seq_length = 64000):
     set_seed(seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Initialize generator and discriminator
-    generator = Generator(z_channels=z_dim, seq_length=128).to(device)
+    generator = Generator(z_channels=z_dim).to(device)
     discriminator = Discriminator().to(device)
 
     optimizer_gen = optim.Adam(generator.parameters(), lr=lr_gen, betas=(0.5, 0.9))
     optimizer_disc = optim.Adam(discriminator.parameters(), lr=lr_disc, betas=(0.5, 0.9))
 
-    # Use the preprocessed dataset
+    # Use the Mel spectrogram dataset
     train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4)
 
     lambda_gp = 10
@@ -325,9 +318,13 @@ def pretrain_single_generator(num_epochs, z_dim, lr_gen, lr_disc, batch_size, se
             real_label = -torch.ones(batch_size, 1, device=device)
             fake_label = torch.ones(batch_size, 1, device=device)
 
-            # Generate noise and fake data
+            # Generate noise and fake images
             noise = generate_noise(batch_size, z_dim, device)
             fake = generator(z=noise)
+
+            # Optional: Add noise to inputs
+            real = real + 0.001 * torch.randn_like(real)
+            fake = fake + 0.001 * torch.randn_like(fake)
 
             # Train Discriminator multiple times
             for _ in range(num_critic):
@@ -359,8 +356,8 @@ def pretrain_single_generator(num_epochs, z_dim, lr_gen, lr_disc, batch_size, se
 
         print(f"Epoch [{epoch+1}/{num_epochs}] Loss D: {avg_loss_disc:.4f}, Loss G: {avg_loss_gen:.4f}")
 
-        # Visualize generated audio
-        visualize_generated_audio(
+        # Visualize generated images
+        visualize_generated_mel_spectrograms(
             [generator], z_dim, num_samples=5, device=device,
             epoch=epoch+1, output_dir=output_dir
         )
@@ -374,20 +371,20 @@ def initialize_multiple_generators(pretrained_generator, num_generators, z_dim):
     device = next(pretrained_generator.parameters()).device
     generators = []
     for _ in range(num_generators):
-        new_generator = Generator(z_channels=z_dim, seq_length=128).to(device)
+        new_generator = Generator(z_channels=z_dim).to(device)
         new_generator.load_state_dict(pretrained_generator.state_dict())
         generators.append(new_generator)
     return generators
 
 def train_gan_with_pretrained_generators(
     pretrained_generator, num_epochs, z_dim, lr_gen, lr_disc, batch_size,
-    num_generators, seed, dataset, output_dir, lambda_ortho=0.1
+    num_generators, seed, dataset, output_dir, lambda_ortho=0.1, seq_length = 64000
 ):
     set_seed(seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Initialize multiple generators from the pretrained generator
-    generators = initialize_multiple_generators(pretrained_generator, num_generators, z_dim)
+    generators = initialize_multiple_generators(pretrained_generator, num_generators, z_dim, seq_length = seq_length)
 
     # Initialize Discriminator and Encoder
     discriminator = Discriminator().to(device)
@@ -397,7 +394,7 @@ def train_gan_with_pretrained_generators(
     optimizer_disc = optim.Adam(discriminator.parameters(), lr=lr_disc, betas=(0.5, 0.9))
     optimizer_encoder = optim.Adam(encoder.parameters(), lr=lr_disc, betas=(0.5, 0.9))
 
-    # Use the preprocessed dataset
+    # Use the Mel spectrogram dataset
     train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4)
 
     lambda_gp = 10  # Gradient penalty coefficient
@@ -415,6 +412,9 @@ def train_gan_with_pretrained_generators(
             real_label = -torch.ones(batch_size, 1, device=device)
             fake_label = torch.ones(batch_size, 1, device=device)
 
+            # Optional: Add noise to real inputs
+            real = real + 0.001 * torch.randn_like(real)
+
             # Train Discriminator multiple times
             for _ in range(num_critic):
                 optimizer_disc.zero_grad()
@@ -422,6 +422,10 @@ def train_gan_with_pretrained_generators(
 
                 noises = [generate_noise(batch_size, z_dim, device) for _ in range(num_generators)]
                 fakes = [gen(z=noises[idx]).detach() for idx, gen in enumerate(generators)]
+
+                # Optional: Add noise to fake inputs
+                for idx in range(num_generators):
+                    fakes[idx] = fakes[idx] + 0.001 * torch.randn_like(fakes[idx])
 
                 disc_fakes = [discriminator(fake) for fake in fakes]
 
@@ -488,8 +492,8 @@ def train_gan_with_pretrained_generators(
             print(f"Epoch [{epoch+1}/{num_epochs}] Loss G{idx+1}: {avg_loss_gens[idx]:.4f}")
         print('-' * 50)
 
-        # Visualize and save generated audio
-        visualize_generated_audio(
+        # Visualize and save generated Mel spectrograms
+        visualize_generated_mel_spectrograms(
             generators, z_dim, num_samples=5, device=device,
             epoch=epoch+1, output_dir=output_dir
         )
@@ -500,40 +504,38 @@ def train_gan_with_pretrained_generators(
 # ------------------ Main Execution ------------------
 
 if __name__ == '__main__':
-    # Step 1: Preprocess Data
-    wav_dir = r'path/to/your/audio/files'  # Replace with your actual data path
-    output_dir = r'path/to/output/directory'  # Directory to save preprocessed data
+    # Define your data directory
+    data_dir = 'data/LibriSpeech/LibriSpeech/dev-clean'  # Replace with your actual data path
 
-    # Preprocess the data
-    preprocess_data(wav_dir, output_dir, num_workers=4)
-
-    # Step 2: Initialize Dataset
-    # Use 'audio' if training on waveforms, 'mel' if training on spectrograms
-    data_type = 'audio'  # Choose 'audio' or 'mel' based on your preference
-    seq_len = 16384  # Adjust sequence length based on your data (e.g., 1 sec at 16kHz)
-
-    dataset = PreprocessedDataset(
-        data_dir=os.path.join(output_dir, 'train'),
-        data_type=data_type,
-        seq_len=seq_len
+    # Initialize your dataset
+    fragment_duration = 4.0  # Duration in seconds
+    target_sr = 16000
+    dataset = FlacDataset(
+        data_dir=data_dir,
+        target_sr=target_sr,
+        fragment_duration=fragment_duration
     )
 
-    # Step 3: Pretrain the generator
+    # Calculate sequence length based on fragment duration and sampling rate
+    seq_length = int(fragment_duration * target_sr)
+
+    # Pretrain the generator
     pretrained_generator = pretrain_single_generator(
-        num_epochs=10,        # Adjust the number of epochs as needed
+        num_epochs=20,        # Adjust the number of epochs as needed
         z_dim=128,
         lr_gen=0.0001,
         lr_disc=0.0004,
         batch_size=16,        # Adjust batch size based on your system's capability
         seed=1234,
         dataset=dataset,
-        output_dir='pretrain_outputs'
+        output_dir='pretrain_outputsCNN',
+        seq_length=seq_length  # Pass the sequence length
     )
 
-    # Step 4: Train multiple generators
+    # Train multiple generators
     trained_generators = train_gan_with_pretrained_generators(
         pretrained_generator=pretrained_generator,
-        num_epochs=20,        # Adjust the number of epochs as needed
+        num_epochs=80,        # Adjust the number of epochs as needed
         z_dim=128,
         lr_gen=0.0001,
         lr_disc=0.0004,
@@ -541,6 +543,7 @@ if __name__ == '__main__':
         num_generators=2,
         seed=1234,
         dataset=dataset,
-        output_dir='multi_gen_outputs',
-        lambda_ortho=0.05
+        output_dir='multi_gen_outputs_CNN',
+        lambda_ortho=0.05,
+        seq_length=seq_length  # Pass the sequence length
     )
