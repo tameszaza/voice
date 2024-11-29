@@ -289,7 +289,7 @@ def visualize_generated_audio(generators, num_samples, device, epoch, output_dir
         gen.train()
 
 
-def pretrain_single_generator(num_epochs, z_dim, lr_gen, lr_disc, batch_size, seed, dataset, output_dir):
+def pretrain_single_generator(num_epochs, z_dim, lr_gen, lr_disc, batch_size, seed, dataset, output_dir, seq_length = 64000):
     set_seed(seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -378,13 +378,13 @@ def initialize_multiple_generators(pretrained_generator, num_generators, z_dim):
 
 def train_gan_with_pretrained_generators(
     pretrained_generator, num_epochs, z_dim, lr_gen, lr_disc, batch_size,
-    num_generators, seed, dataset, output_dir, lambda_ortho=0.1
+    num_generators, seed, dataset, output_dir, lambda_ortho=0.1, seq_length = 64000
 ):
     set_seed(seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Initialize multiple generators from the pretrained generator
-    generators = initialize_multiple_generators(pretrained_generator, num_generators, z_dim)
+    generators = initialize_multiple_generators(pretrained_generator, num_generators, z_dim, seq_length = seq_length)
 
     # Initialize Discriminator and Encoder
     discriminator = Discriminator().to(device)

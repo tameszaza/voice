@@ -507,7 +507,7 @@ def train_gan_with_pretrained_generators(
 
 if __name__ == '__main__':
     # Define your data directory
-    data_dir = r'D:\FINALPROJ\voice\data\LibriSpeech\dev-clean'
+    data_dir = 'data/LibriSpeech/LibriSpeech/dev-clean'
 
     # Initialize your dataset
     dataset = FlacDataset(
