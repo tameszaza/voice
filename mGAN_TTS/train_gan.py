@@ -10,50 +10,98 @@ from torch.utils.data import DataLoader, Dataset
 import librosa
 import matplotlib.pyplot as plt
 import librosa.display
+import glob
+# ------------------ Dataset Class ------------------
+
 
 # ------------------ Dataset Class ------------------
 
+
 class FlacDataset(Dataset):
-    def __init__(self, data_dir, target_sr=16000, n_mels=128, hop_length=256):
+    def __init__(self, data_dir, target_sr=16000, fragment_duration=4.0, 
+                 n_fft=2048, hop_length=512, n_mels=128, max_len=128):
         """
+        Dataset to handle audio files and convert them to fixed-size Mel spectrograms.
         Args:
-            data_dir (str): Path to the directory containing FLAC files.
-            target_sr (int): Target sample rate for audio files.
-            n_mels (int): Number of Mel bands to generate.
+            data_dir (str): Directory containing audio files (.flac or .wav).
+            target_sr (int): Target sampling rate for audio.
+            fragment_duration (float): Duration (in seconds) for each audio fragment.
+            n_fft (int): Number of FFT components for Mel spectrogram.
             hop_length (int): Number of samples between successive frames.
+            n_mels (int): Number of Mel bands.
+            max_len (int): Maximum number of frames in Mel spectrograms.
         """
         self.data_dir = data_dir
-        self.file_paths = self._get_file_paths()
         self.target_sr = target_sr
-        self.n_mels = n_mels
+        self.fragment_duration = fragment_duration
+        self.n_fft = n_fft
         self.hop_length = hop_length
+        self.n_mels = n_mels
+        self.max_len = max_len
+        self.audio_fragments = []
 
-    def _get_file_paths(self):
-        # Retrieve all FLAC files in the directory
-        file_paths = []
+        self._load_files()
+
+    def _load_files(self):
+        # Gather all audio files (both .flac and .wav)
+        audio_files = []
         for root, _, files in os.walk(self.data_dir):
             for file in files:
-                if file.endswith('.flac'):
-                    file_paths.append(os.path.join(root, file))
-        return file_paths
+                if file.endswith('.flac') or file.endswith('.wav'):
+                    audio_files.append(os.path.join(root, file))
+
+        if not audio_files:
+            raise ValueError(f"No audio files found in directory: {self.data_dir}")
+
+        print(f"Found {len(audio_files)} audio files.")
+
+        fragment_samples = int(self.fragment_duration * self.target_sr)
+        current_audio = []  # Buffer to hold concatenated audio
+
+        for file_path in audio_files:
+            # Load each audio file
+            y, sr = librosa.load(file_path, sr=self.target_sr)
+            total_samples = len(y)
+            start = 0
+
+            while start < total_samples:
+                remaining_samples = total_samples - start
+                needed_samples = fragment_samples - len(current_audio)
+                take_samples = min(remaining_samples, needed_samples)
+                current_audio.extend(y[start:start + take_samples])
+                start += take_samples
+
+                if len(current_audio) == fragment_samples:
+                    # Save the current fragment
+                    self.audio_fragments.append(np.array(current_audio))
+                    current_audio = []
+
+        # Handle leftover buffer
+        if len(current_audio) > 0:
+            # Pad to make it a complete fragment if necessary
+            if len(current_audio) < fragment_samples:
+                current_audio.extend([0] * (fragment_samples - len(current_audio)))
+            self.audio_fragments.append(np.array(current_audio))
+
+        print(f"Generated {len(self.audio_fragments)} audio fragments.")
 
     def __len__(self):
-        return len(self.file_paths)
+        return len(self.audio_fragments)
 
     def __getitem__(self, idx):
-        # Load the FLAC file
-        file_path = self.file_paths[idx]
-        audio, sr = librosa.load(file_path, sr=self.target_sr)
+        # Retrieve the audio fragment
+        audio = self.audio_fragments[idx]
 
         # Normalize audio to [-1, 1]
-        audio = audio / np.max(np.abs(audio))
+        audio = audio / np.max(np.abs(audio) + 1e-9)  # Added epsilon to prevent division by zero
 
         # Compute the Mel spectrogram
         mel_spec = librosa.feature.melspectrogram(
             y=audio,
             sr=self.target_sr,
-            n_mels=self.n_mels,
-            hop_length=self.hop_length
+            n_fft=self.n_fft,
+            hop_length=self.hop_length,
+            n_mels=self.n_mels
         )
 
         # Convert power spectrogram (amplitude squared) to decibel (dB) units
@@ -62,14 +110,24 @@ class FlacDataset(Dataset):
         # Normalize Mel spectrogram to [0, 1]
         mel_spec_norm = (mel_spec_db + 80) / 80  # Assuming min dB is -80
 
-        # Convert to PyTorch tensor
-        mel_spec_tensor = torch.tensor(mel_spec_norm, dtype=torch.float32)
+        # Pad or truncate to fixed length
+        if mel_spec_norm.shape[1] < self.max_len:
+            pad_width = self.max_len - mel_spec_norm.shape[1]
+            mel_spec_norm = np.pad(mel_spec_norm, ((0, 0), (0, pad_width)), mode='constant')
+        else:
+            mel_spec_norm = mel_spec_norm[:, :self.max_len]
 
-        # Add channel dimension if necessary (e.g., [channels, n_mels, time])
-        if mel_spec_tensor.dim() == 2:
-            mel_spec_tensor = mel_spec_tensor.unsqueeze(0)
+        # Convert to PyTorch tensor and add channel dimension
+        mel_spec_tensor = torch.tensor(mel_spec_norm, dtype=torch.float32).unsqueeze(0)
 
         return mel_spec_tensor
+
+# ------------------ Rest of the Code Remains the Same ------------------
+
+# The rest of your code (model definitions, training functions, etc.) remains unchanged.
+# Ensure you import any additional necessary libraries if they are used in your code.
+
+# ------------------ Main Execution ------------------
 
 # ------------------ Model Architecture ------------------
 
@@ -449,7 +507,7 @@ def train_gan_with_pretrained_generators(
 
 if __name__ == '__main__':
     # Define your data directory
-    data_dir = r'D:\FINALPROJ\voice\data\LibriSpeech\dev-clean'  # Replace with your actual data path
+    data_dir = 'data/LibriSpeech/LibriSpeech/dev-clean'# Replace with your actual data path
 
     # Initialize your dataset
     dataset = FlacDataset(
