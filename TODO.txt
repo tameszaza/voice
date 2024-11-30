@@ -1,0 +1,8 @@
+Tames:
+-generator architecture
+-recheck wave to audio
+Putter:
+mGASNs TTS
+--loss fx
+-linguistic feateure
+-random windows discrimanator
