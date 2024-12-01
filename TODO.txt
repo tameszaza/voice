@@ -6,3 +6,4 @@ mGASNs TTS
 --loss fx
 -linguistic feateure
 -random windows discrimanator
+-resumable train
