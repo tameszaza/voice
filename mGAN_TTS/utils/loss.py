@@ -95,6 +95,50 @@ class MultiResolutionSTFTLoss(nn.Module):
         mag_loss = sum(mag_losses) / len(mag_losses)
 
         return sc_loss, mag_loss
+    
+
+import torch.autograd as autograd
+
+def orthogonal_loss(feature1, feature2):
+    inner_product = torch.sum(feature1 * feature2, dim=1)
+    norm1 = torch.norm(feature1, dim=1)
+    norm2 = torch.norm(feature2, dim=1)
+    cosine_similarity = inner_product / (norm1 * norm2 + 1e-8)
+    return torch.mean(cosine_similarity**2)  # Minimize the cosine similarity to make vectors orthogonal
+
+# Wasserstein loss
+def wasserstein_loss(y_pred, y_true):
+    return torch.mean(y_pred * y_true)
+
+def compute_gradient_penalty(discriminator, real_data, fake_data, device):
+    batch_size = real_data.size(0)
+    epsilon = torch.rand(batch_size, 1, 1, 1, device=device)  # Interpolation factor
+    epsilon = epsilon.expand_as(real_data)
+
+    # Interpolate between real and fake data
+    interpolates = epsilon * real_data + (1 - epsilon) * fake_data
+    interpolates = interpolates.requires_grad_(True)
+
+    # Compute discriminator output for interpolates
+    d_interpolates = discriminator(interpolates)
+    grad_outputs = torch.ones_like(d_interpolates, device=device)
+
+    # Compute gradients of d_interpolates w.r.t. interpolates
+    gradients = autograd.grad(
+        outputs=d_interpolates,
+        inputs=interpolates,
+        grad_outputs=grad_outputs,
+        create_graph=True,
+        retain_graph=True,
+        only_inputs=True,
+    )[0]
+
+    # Reshape gradients to [batch_size, -1]
+    gradients = gradients.view(batch_size, -1)
+
+    # Compute gradient penalty
+    gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
+    return gradient_penalty
 
 if __name__ == "__main__":
     model = MultiResolutionSTFTLoss()
@@ -103,3 +147,5 @@ if __name__ == "__main__":
     
     loss = model(x, y)
     print(loss)
+
+
