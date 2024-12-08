@@ -1,2 +1,2 @@
 data/
-multi_gen_outputs_CNN2
+multi_gen_outputs_CNN2my_checkpoints/*.pth
