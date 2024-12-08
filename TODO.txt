@@ -3,7 +3,7 @@ Tames:
 -recheck wave to audio
 Putter:
 mGASNs TTS
---loss fx : Finish (use the same wasser)
+--loss fx : Finish (use the same wasser )
 -linguistic feateure : Now debugging stage
 -random windows discrimanator (implementation stage)
 -resumable train (Not sure if it work, but need to run to test)
