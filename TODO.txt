@@ -7,3 +7,11 @@ mGASNs TTS
 -linguistic feateure : Now debugging stage
 -random windows discrimanator (implementation stage)
 -resumable train (Not sure if it work, but need to run to test)
+
+command for remote login
+ssh ml@10.205.203.179
+cd Documents
+source myenv/bin/activate
+jupyter-notebook --no-browser --port=8888
+ssh ml@10.205.203.179
+ssh -L 8888:localhost:8888 ml@10.205.203.179
