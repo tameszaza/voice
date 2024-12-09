@@ -15,3 +15,4 @@ source myenv/bin/activate
 jupyter-notebook --no-browser --port=8888
 ssh ml@10.205.203.179
 ssh -L 8888:localhost:8888 ml@10.205.203.179
+watch -n 1 nvidia-smi
