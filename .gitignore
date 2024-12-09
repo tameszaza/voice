@@ -4,3 +4,5 @@ my_checkpoints/*.pth
 .venv/
 gan_single_check.pth
 waveform_pre/
+gan_single_check.pth
+waveform_pre/
