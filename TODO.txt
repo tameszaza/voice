@@ -16,3 +16,8 @@ jupyter-notebook --no-browser --port=8888
 ssh ml@10.205.203.179
 ssh -L 8888:localhost:8888 ml@10.205.203.179
 watch -n 1 nvidia-smi
+http://localhost:8888/doc/tree/voice/mGANs1_waveform_linguist_2.ipynb
+
+Chalenges
+-linguishtic feature model generator model 2 fail and so slow to trin and experience under utilize issue
+-waveform w/o feature each generator generate same sentence over with slight ly change pronoucuation (mode collapse) - might be data set variety problem might been fixed using 500 hours dataset
