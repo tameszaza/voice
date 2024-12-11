@@ -10,13 +10,48 @@ mGASNs TTS
 
 command for remote login
 ssh ml@10.205.203.179
+sudo reboot now 
+เพื่อ reboot server จะขาดการเชื่อมต่อ 3 นาทีแนะนำให้ทำประจำ
+
+ssh ml@10.205.203.179
+เพื่อเชื่อมต่ออีกครั้ง
+
+tmux
+เพื่อสร้าง detachable session
+
 cd Documents
 source myenv/bin/activate
 jupyter-notebook --no-browser --port=8888
-ssh ml@10.205.203.179
+คำสั่งด้านบนให้รันบน session tmux
+กด crtl+b then d เพื่อ detach session กลับสู่ bash
+
+คำสั้ง 
+tmux attach -t [session ID]
+เพื่อ attach session 
+
+เช็ค session ID จาก 
+tmux ls
+
+หมายเหตุทุกครั้งที่ reboot ต้อง run jupyter server ใน tmux ใหม่ คำสั่งด้านบนไม่ต้องรันซ้ำ หากได้รันไปแล้วบน server
+
+เปิด terminal ใหม่
 ssh -L 8888:localhost:8888 ml@10.205.203.179
+เพื่อทำ portforwarding มาที่ local machine localhost คำสั่งนี้เป็นคำสั่งเดียวที่จำเป็นเพื่อ เปิด jupyter
+
+http://localhost:8888/doc/tree/
+เข้าลิงข้างบนบน browser local machine เพื่อเข้างาน
+
 watch -n 1 nvidia-smi
-http://localhost:8888/doc/tree/voice/mGANs1_waveform_linguist_2.ipynb
+เพื่อดูการใช้งาน gpu
+
+htop
+เพื่อดู task menager
+
+wget เพื่อโหลดไฟล์จากเน็ตเข้า remote machine โดยตรง
+
+คำสั่งเกี่ยวกับไฟล์อื่นๆ สามารถดูได้ใน google
+
+ทุกอย่างต้องใช้ wifi โรงเรียนหรือต้องใช้ global protect เพื่อ vpn มาใน networkโรงเรียน ซึ่งโปรแกรมนี้ไม่รองรับ linuxTT
 
 Chalenges
 -linguishtic feature model generator model 2 fail and so slow to trin and experience under utilize issue
