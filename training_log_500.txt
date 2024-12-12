@@ -28,3 +28,12 @@ task: <Task pending name='Task-3' coro=<Kernel.poll_control_queue() running at /
 2024-12-12 07:43:35 Saved waveform_pre_500/epoch2_gen1_sample3.wav
 2024-12-12 07:43:35 Saved waveform_pre_500/epoch2_gen1_sample4.wav
 2024-12-12 07:43:35 Saved waveform_pre_500/epoch2_gen1_sample5.wav
+2024-12-12 11:22:18 Task was destroyed but it is pending!
+task: <Task pending name='Task-3' coro=<Kernel.poll_control_queue() running at /home/ml/Documents/myenv/lib/python3.12/site-packages/ipykernel/kernelbase.py:304> wait_for=<Future finished result=<Future at 0x...state=pending>> cb=[_chain_future.<locals>._call_set_state() at /usr/lib/python3.12/asyncio/futures.py:394]>
+2024-12-12 11:23:05 Found 148688 .flac files in ./data.
+2024-12-12 11:23:32 Found 148688 .flac files in ./data.
+2024-12-12 11:30:58 Number of fragmented audio fragments in sink: 148497
+2024-12-12 11:31:07 Number of additional samples created from sink fragments: 82531
+2024-12-12 11:31:07 Total number of audio samples in dataset: 447173
+2024-12-12 12:49:56 Loading checkpoint...
+2024-12-12 12:49:57 Resumed from epoch 3
