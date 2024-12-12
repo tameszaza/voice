@@ -7,8 +7,5 @@ gan_single_check.pth
 waveform_pre/
 gan_single_check.pth
 waveform_pre/
-<<<<<<< HEAD
 preprocessed_data
-=======
-preprocessed_data
->>>>>>> f773904c54af3dcfde9ea4fc64885ee4201f8c87
+output/
