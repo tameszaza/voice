@@ -37,3 +37,15 @@ task: <Task pending name='Task-3' coro=<Kernel.poll_control_queue() running at /
 2024-12-12 11:31:07 Total number of audio samples in dataset: 447173
 2024-12-12 12:49:56 Loading checkpoint...
 2024-12-12 12:49:57 Resumed from epoch 3
+2024-12-12 16:37:31 Epoch [1/20] Loss D: -9.0275, Loss G: 7.5635
+2024-12-12 16:37:31 Saved waveform_pre_500_scaled_noise/epoch1_gen1_sample1.wav
+2024-12-12 16:37:31 Saved waveform_pre_500_scaled_noise/epoch1_gen1_sample2.wav
+2024-12-12 16:37:31 Saved waveform_pre_500_scaled_noise/epoch1_gen1_sample3.wav
+2024-12-12 16:37:31 Saved waveform_pre_500_scaled_noise/epoch1_gen1_sample4.wav
+2024-12-12 16:37:31 Saved waveform_pre_500_scaled_noise/epoch1_gen1_sample5.wav
+2024-12-12 20:13:18 Epoch [2/20] Loss D: -2.5074, Loss G: -5.1653
+2024-12-12 20:13:18 Saved waveform_pre_500_scaled_noise/epoch2_gen1_sample1.wav
+2024-12-12 20:13:18 Saved waveform_pre_500_scaled_noise/epoch2_gen1_sample2.wav
+2024-12-12 20:13:18 Saved waveform_pre_500_scaled_noise/epoch2_gen1_sample3.wav
+2024-12-12 20:13:18 Saved waveform_pre_500_scaled_noise/epoch2_gen1_sample4.wav
+2024-12-12 20:13:18 Saved waveform_pre_500_scaled_noise/epoch2_gen1_sample5.wav
