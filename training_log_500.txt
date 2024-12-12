@@ -2,3 +2,29 @@
 2024-12-11 00:30:18 Number of fragmented audio fragments in sink: 148497
 2024-12-11 00:30:26 Number of additional samples created from sink fragments: 82531
 2024-12-11 00:30:26 Total number of audio samples in dataset: 447173
+2024-12-11 21:15:30 Epoch [1/20] Loss D: -9.1786, Loss G: 3.2702
+2024-12-11 21:15:30 Saved waveform_pre_500/epoch1_gen1_sample1.wav
+2024-12-11 21:15:30 Saved waveform_pre_500/epoch1_gen1_sample2.wav
+2024-12-11 21:15:30 Saved waveform_pre_500/epoch1_gen1_sample3.wav
+2024-12-11 21:15:30 Saved waveform_pre_500/epoch1_gen1_sample4.wav
+2024-12-11 21:15:30 Saved waveform_pre_500/epoch1_gen1_sample5.wav
+2024-12-11 22:21:56 Loading checkpoint...
+2024-12-11 22:21:56 Resumed from epoch 1
+2024-12-12 00:13:18 Loading checkpoint...
+2024-12-12 00:13:18 Resumed from epoch 1
+2024-12-12 00:13:28 Task was destroyed but it is pending!
+task: <Task pending name='Task-3' coro=<Kernel.poll_control_queue() running at /home/ml/Documents/myenv/lib/python3.12/site-packages/ipykernel/kernelbase.py:304> wait_for=<Future finished result=<Future at 0x...state=pending>> cb=[_chain_future.<locals>._call_set_state() at /usr/lib/python3.12/asyncio/futures.py:394]>
+2024-12-12 00:13:34 Loading checkpoint...
+2024-12-12 00:13:34 Resumed from epoch 1
+2024-12-12 04:08:04 Epoch [1/20] Loss D: -3.4002, Loss G: 6.6742
+2024-12-12 04:08:04 Saved waveform_pre_500/epoch1_gen1_sample1.wav
+2024-12-12 04:08:04 Saved waveform_pre_500/epoch1_gen1_sample2.wav
+2024-12-12 04:08:04 Saved waveform_pre_500/epoch1_gen1_sample3.wav
+2024-12-12 04:08:04 Saved waveform_pre_500/epoch1_gen1_sample4.wav
+2024-12-12 04:08:04 Saved waveform_pre_500/epoch1_gen1_sample5.wav
+2024-12-12 07:43:35 Epoch [2/20] Loss D: -1.3017, Loss G: -4.8648
+2024-12-12 07:43:35 Saved waveform_pre_500/epoch2_gen1_sample1.wav
+2024-12-12 07:43:35 Saved waveform_pre_500/epoch2_gen1_sample2.wav
+2024-12-12 07:43:35 Saved waveform_pre_500/epoch2_gen1_sample3.wav
+2024-12-12 07:43:35 Saved waveform_pre_500/epoch2_gen1_sample4.wav
+2024-12-12 07:43:35 Saved waveform_pre_500/epoch2_gen1_sample5.wav
