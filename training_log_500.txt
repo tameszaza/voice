@@ -117,3 +117,29 @@ task: <Task pending name='Task-3' coro=<Kernel.poll_control_queue() running at /
 2024-12-15 14:01:56 Saved output/waveform_pre_500_scaled_noise/epoch11_gen1_sample3.wav
 2024-12-15 14:01:56 Saved output/waveform_pre_500_scaled_noise/epoch11_gen1_sample4.wav
 2024-12-15 14:01:56 Saved output/waveform_pre_500_scaled_noise/epoch11_gen1_sample5.wav
+2024-12-15 17:37:42 Epoch [12/20] Loss D: -1.2563, Loss G: 10.1604
+2024-12-15 17:37:42 Saved output/waveform_pre_500_scaled_noise/epoch12_gen1_sample1.wav
+2024-12-15 17:37:42 Saved output/waveform_pre_500_scaled_noise/epoch12_gen1_sample2.wav
+2024-12-15 17:37:42 Saved output/waveform_pre_500_scaled_noise/epoch12_gen1_sample3.wav
+2024-12-15 17:37:42 Saved output/waveform_pre_500_scaled_noise/epoch12_gen1_sample4.wav
+2024-12-15 17:37:42 Saved output/waveform_pre_500_scaled_noise/epoch12_gen1_sample5.wav
+2024-12-15 21:13:46 Epoch [13/20] Loss D: -1.2529, Loss G: 11.9295
+2024-12-15 21:13:46 Saved output/waveform_pre_500_scaled_noise/epoch13_gen1_sample1.wav
+2024-12-15 21:13:46 Saved output/waveform_pre_500_scaled_noise/epoch13_gen1_sample2.wav
+2024-12-15 21:13:46 Saved output/waveform_pre_500_scaled_noise/epoch13_gen1_sample3.wav
+2024-12-15 21:13:46 Saved output/waveform_pre_500_scaled_noise/epoch13_gen1_sample4.wav
+2024-12-15 21:13:46 Saved output/waveform_pre_500_scaled_noise/epoch13_gen1_sample5.wav
+2024-12-15 21:17:48 Task was destroyed but it is pending!
+task: <Task pending name='Task-3' coro=<Kernel.poll_control_queue() running at /home/ml/Documents/myenv/lib/python3.12/site-packages/ipykernel/kernelbase.py:304> wait_for=<Future finished result=<Future at 0x...state=pending>> cb=[_chain_future.<locals>._call_set_state() at /usr/lib/python3.12/asyncio/futures.py:394]>
+2024-12-15 22:14:10 Found 148688 .flac files in ./data.
+2024-12-15 22:16:17 Task was destroyed but it is pending!
+task: <Task pending name='Task-2' coro=<Kernel.poll_control_queue() running at /home/ml/Documents/myenv/lib/python3.12/site-packages/ipykernel/kernelbase.py:304> wait_for=<Future finished result=<Future at 0x...state=pending>> cb=[_chain_future.<locals>._call_set_state() at /usr/lib/python3.12/asyncio/futures.py:394]>
+2024-12-15 22:19:07 Init
+2024-12-15 22:19:07 start new training
+2024-12-15 22:19:58 Init
+2024-12-15 22:19:59 start new training
+2024-12-15 22:21:07 Task was destroyed but it is pending!
+task: <Task pending name='Task-2' coro=<Kernel.poll_control_queue() running at /home/ml/Documents/myenv/lib/python3.12/site-packages/ipykernel/kernelbase.py:304> wait_for=<Future finished result=<Future at 0x...state=pending>> cb=[_chain_future.<locals>._call_set_state() at /usr/lib/python3.12/asyncio/futures.py:394]>
+2024-12-15 22:21:12 Init
+2024-12-15 22:21:12 Loading checkpoint...
+2024-12-15 22:21:12 Resumed from epoch 13
