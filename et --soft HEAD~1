@@ -1,0 +1,109 @@
+[33m42b4d28[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m)[m fix mGAns trainig loop
+[33m2f1df35[m[33m ([m[1;31morigin/main[m[33m)[m wooo
+[33mf8c8c8b[m add data_small to gitignore
+[33mb1db155[m update code
+[33m2c9f8f0[m fix directory
+[33mbafee1e[m fix again
+[33mabcd922[m fix gitignore from gitignore to gitignore and then checkout
+[33ma277cb7[m adda
+[33m0b912e0[m add
+[33m417da9d[m scaled noise
+[33m112ba23[m Update mGANs1_waveform_memoptimized.ipynb
+[33m0d7d0e9[m Update mGANs1_waveform_memoptimized.ipynb
+[33med06f47[m recommit
+[33m2b24267[m add tutorial
+[33md26b754[m change variable name
+[33m1bb1f23[m fix memmory leakage
+[33m0eaf2a7[m update for big data training ram not enough
+[33mb9da430[m I dk Merge branch 'main' of https://github.com/tameszaza/voice
+[33md7f5b3b[m train a lot for small dataset
+[33m571d2ce[m Update TODO.txt
+[33mcf428e9[m add useful command
+[33m180a1e6[m update logging system for server running
+[33m7477d49[m first commit from server
+[33m2809917[m Untrack large files and update .gitignore
+[33m60d2ba1[m Add .gitignore to exclude large files
+[33m1329676[m tutorial
+[33m4a8bc52[m update
+[33m3183148[m fix gitignore
+[33mcd9dc08[m Update .gitignore to exclude large files
+[33m2996f8e[m merge
+[33m1c11c9d[m fix
+[33m6158a72[m 5 epoch terminate can resume
+[33m1044a54[m todo
+[33mc7beceb[m checkpoint not finish
+[33m6a2e97f[m nth
+[33m8c3d421[m debug
+[33m1ebbde6[m I hope this will work (linguistic + new architecture)
+[33m52e0772[m phoenic feature
+[33m35b939e[m Merge branch 'main' of https://github.com/tameszaza/voice yo
+[33me07a42a[m Rename acaa9d5c: mGANs1_waveform.ipynb to mGANs1_waveform_recommit.ipynb
+[33m3a3b900[m Update TODO.txt
+[33m0a513e6[m halfway tts
+[33m63104e0[m now training mGANs function are resumable
+[33mca359a1[m trained31
+[33mff48af8[m train_smth
+[33m35f27cf[m add todo
+[33m3dd1ea9[m rerun wave form
+[33m459022f[m WOOOOO
+[33mdb4628d[m Merge branch 'main' of https://github.com/tameszaza/voice yay
+[33m7ada078[m hhhh
+[33me1d1718[m mainub
+[33mc60ec07[m halfway there
+[33mafc9325[m try
+[33m8708fb9[m preprocess done
+[33m9df3038[m fix
+[33m7c67924[m try
+[33me229cac[m fix smth
+[33m12d488b[m debug 01
+[33mab15b4e[m trained something
+[33mb16307a[m BRR
+[33ma059ff8[m add folder+ gantts first try
+[33mc64c69e[m Update README.md
+[33m2c7b6d4[m Create README.md
+[33mcbb5c41[m hell no
+[33maea8848[m re introduce
+[33m0085cc3[m remove trrain result from github
+[33mce9e7d0[m trained smth
+[33m423b212[m convert waveform to audio(might have bug???)
+[33md9db30e[m waveform trained
+[33m32086f3[m trained
+[33macaa9d5[m model1  waveform
+[33mbc21dfc[m ignore some result file
+[33m9467a1c[m trained
+[33md666e5b[m update
+[33m86ea411[m ignore data
+[33m4c8b3d8[m update_gitignore
+[33m7dcdd50[m markdown
+[33m3315622[m pre-train done
+[33mfdc84f9[m something new
+[33m244ac08[m rerun and data loader done
+[33m7e97499[m data loader and rerun done
+[33me6d9abc[m update
+[33ma267734[m recode data preprocess
+[33m09b493a[m rename and trained done
+[33me8ab703[m fdf
+[33mb02cb9a[m gh
+[33m2b4ea2e[m fdfd
+[33m6be4be7[m dfdfd
+[33m8dee69c[m spec to audio
+[33m477d22c[m dss
+[33m76fda2f[m ipynb
+[33m0bb444f[m first train
+[33m6488ff5[m just push mel
+[33m5f0a937[m re introduce
+[33mc648604[m Waveform data preprocess + 1d model construct
+[33mc0af1a8[m I hope this work
+[33m479ed52[m update for putter
+[33mecf6c57[m new train model
+[33me17c279[m mGANs3 trained
+[33m2879e76[m mgan3 with classification implemented
+[33m4af5768[m add note.txt
+[33m18d0d86[m mim mGANs completed
+[33mcb77155[m add mGANs model from paper Multi-generator GAN learning disconnected manifolds with mutual information
+[33m7dbf67a[m mgans10 trained
+[33md440cc1[m mgans success
+[33m65e0a88[m mgans1
+[33m0c18249[m mgans
+[33m553a032[m trained
+[33m798036e[m first commit

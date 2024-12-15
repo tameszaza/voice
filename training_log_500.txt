@@ -49,3 +49,71 @@ task: <Task pending name='Task-3' coro=<Kernel.poll_control_queue() running at /
 2024-12-12 20:13:18 Saved waveform_pre_500_scaled_noise/epoch2_gen1_sample3.wav
 2024-12-12 20:13:18 Saved waveform_pre_500_scaled_noise/epoch2_gen1_sample4.wav
 2024-12-12 20:13:18 Saved waveform_pre_500_scaled_noise/epoch2_gen1_sample5.wav
+2024-12-13 22:08:48 Loading checkpoint...
+2024-12-13 22:08:49 Resumed from epoch 4
+2024-12-14 02:03:26 Epoch [1/20] Loss D: -1.1095, Loss G: -2.9190
+2024-12-14 02:03:26 Saved output/waveform_pre_500_scaled_noise/epoch1_gen1_sample1.wav
+2024-12-14 02:03:26 Saved output/waveform_pre_500_scaled_noise/epoch1_gen1_sample2.wav
+2024-12-14 02:03:26 Saved output/waveform_pre_500_scaled_noise/epoch1_gen1_sample3.wav
+2024-12-14 02:03:26 Saved output/waveform_pre_500_scaled_noise/epoch1_gen1_sample4.wav
+2024-12-14 02:03:26 Saved output/waveform_pre_500_scaled_noise/epoch1_gen1_sample5.wav
+2024-12-14 05:39:14 Epoch [2/20] Loss D: -1.1495, Loss G: -6.3508
+2024-12-14 05:39:14 Saved output/waveform_pre_500_scaled_noise/epoch2_gen1_sample1.wav
+2024-12-14 05:39:14 Saved output/waveform_pre_500_scaled_noise/epoch2_gen1_sample2.wav
+2024-12-14 05:39:14 Saved output/waveform_pre_500_scaled_noise/epoch2_gen1_sample3.wav
+2024-12-14 05:39:14 Saved output/waveform_pre_500_scaled_noise/epoch2_gen1_sample4.wav
+2024-12-14 05:39:14 Saved output/waveform_pre_500_scaled_noise/epoch2_gen1_sample5.wav
+2024-12-14 09:15:02 Epoch [3/20] Loss D: -1.1322, Loss G: -1.5604
+2024-12-14 09:15:02 Saved output/waveform_pre_500_scaled_noise/epoch3_gen1_sample1.wav
+2024-12-14 09:15:02 Saved output/waveform_pre_500_scaled_noise/epoch3_gen1_sample2.wav
+2024-12-14 09:15:02 Saved output/waveform_pre_500_scaled_noise/epoch3_gen1_sample3.wav
+2024-12-14 09:15:02 Saved output/waveform_pre_500_scaled_noise/epoch3_gen1_sample4.wav
+2024-12-14 09:15:02 Saved output/waveform_pre_500_scaled_noise/epoch3_gen1_sample5.wav
+2024-12-14 12:50:55 Epoch [4/20] Loss D: -1.1585, Loss G: 0.4467
+2024-12-14 12:50:55 Saved output/waveform_pre_500_scaled_noise/epoch4_gen1_sample1.wav
+2024-12-14 12:50:55 Saved output/waveform_pre_500_scaled_noise/epoch4_gen1_sample2.wav
+2024-12-14 12:50:55 Saved output/waveform_pre_500_scaled_noise/epoch4_gen1_sample3.wav
+2024-12-14 12:50:55 Saved output/waveform_pre_500_scaled_noise/epoch4_gen1_sample4.wav
+2024-12-14 12:50:55 Saved output/waveform_pre_500_scaled_noise/epoch4_gen1_sample5.wav
+2024-12-14 16:26:47 Epoch [5/20] Loss D: -1.1759, Loss G: 16.7554
+2024-12-14 16:26:47 Saved output/waveform_pre_500_scaled_noise/epoch5_gen1_sample1.wav
+2024-12-14 16:26:47 Saved output/waveform_pre_500_scaled_noise/epoch5_gen1_sample2.wav
+2024-12-14 16:26:47 Saved output/waveform_pre_500_scaled_noise/epoch5_gen1_sample3.wav
+2024-12-14 16:26:47 Saved output/waveform_pre_500_scaled_noise/epoch5_gen1_sample4.wav
+2024-12-14 16:26:47 Saved output/waveform_pre_500_scaled_noise/epoch5_gen1_sample5.wav
+2024-12-14 20:02:42 Epoch [6/20] Loss D: -1.2575, Loss G: 4.5358
+2024-12-14 20:02:42 Saved output/waveform_pre_500_scaled_noise/epoch6_gen1_sample1.wav
+2024-12-14 20:02:42 Saved output/waveform_pre_500_scaled_noise/epoch6_gen1_sample2.wav
+2024-12-14 20:02:42 Saved output/waveform_pre_500_scaled_noise/epoch6_gen1_sample3.wav
+2024-12-14 20:02:42 Saved output/waveform_pre_500_scaled_noise/epoch6_gen1_sample4.wav
+2024-12-14 20:02:42 Saved output/waveform_pre_500_scaled_noise/epoch6_gen1_sample5.wav
+2024-12-14 23:38:34 Epoch [7/20] Loss D: -1.2006, Loss G: 4.4966
+2024-12-14 23:38:34 Saved output/waveform_pre_500_scaled_noise/epoch7_gen1_sample1.wav
+2024-12-14 23:38:34 Saved output/waveform_pre_500_scaled_noise/epoch7_gen1_sample2.wav
+2024-12-14 23:38:34 Saved output/waveform_pre_500_scaled_noise/epoch7_gen1_sample3.wav
+2024-12-14 23:38:34 Saved output/waveform_pre_500_scaled_noise/epoch7_gen1_sample4.wav
+2024-12-14 23:38:34 Saved output/waveform_pre_500_scaled_noise/epoch7_gen1_sample5.wav
+2024-12-15 03:14:33 Epoch [8/20] Loss D: -1.2437, Loss G: 14.9453
+2024-12-15 03:14:33 Saved output/waveform_pre_500_scaled_noise/epoch8_gen1_sample1.wav
+2024-12-15 03:14:33 Saved output/waveform_pre_500_scaled_noise/epoch8_gen1_sample2.wav
+2024-12-15 03:14:33 Saved output/waveform_pre_500_scaled_noise/epoch8_gen1_sample3.wav
+2024-12-15 03:14:33 Saved output/waveform_pre_500_scaled_noise/epoch8_gen1_sample4.wav
+2024-12-15 03:14:33 Saved output/waveform_pre_500_scaled_noise/epoch8_gen1_sample5.wav
+2024-12-15 06:50:17 Epoch [9/20] Loss D: -1.2475, Loss G: 8.8632
+2024-12-15 06:50:17 Saved output/waveform_pre_500_scaled_noise/epoch9_gen1_sample1.wav
+2024-12-15 06:50:17 Saved output/waveform_pre_500_scaled_noise/epoch9_gen1_sample2.wav
+2024-12-15 06:50:17 Saved output/waveform_pre_500_scaled_noise/epoch9_gen1_sample3.wav
+2024-12-15 06:50:17 Saved output/waveform_pre_500_scaled_noise/epoch9_gen1_sample4.wav
+2024-12-15 06:50:17 Saved output/waveform_pre_500_scaled_noise/epoch9_gen1_sample5.wav
+2024-12-15 10:26:06 Epoch [10/20] Loss D: -1.2451, Loss G: 9.0583
+2024-12-15 10:26:06 Saved output/waveform_pre_500_scaled_noise/epoch10_gen1_sample1.wav
+2024-12-15 10:26:06 Saved output/waveform_pre_500_scaled_noise/epoch10_gen1_sample2.wav
+2024-12-15 10:26:06 Saved output/waveform_pre_500_scaled_noise/epoch10_gen1_sample3.wav
+2024-12-15 10:26:06 Saved output/waveform_pre_500_scaled_noise/epoch10_gen1_sample4.wav
+2024-12-15 10:26:06 Saved output/waveform_pre_500_scaled_noise/epoch10_gen1_sample5.wav
+2024-12-15 14:01:56 Epoch [11/20] Loss D: -1.2976, Loss G: -1.5673
+2024-12-15 14:01:56 Saved output/waveform_pre_500_scaled_noise/epoch11_gen1_sample1.wav
+2024-12-15 14:01:56 Saved output/waveform_pre_500_scaled_noise/epoch11_gen1_sample2.wav
+2024-12-15 14:01:56 Saved output/waveform_pre_500_scaled_noise/epoch11_gen1_sample3.wav
+2024-12-15 14:01:56 Saved output/waveform_pre_500_scaled_noise/epoch11_gen1_sample4.wav
+2024-12-15 14:01:56 Saved output/waveform_pre_500_scaled_noise/epoch11_gen1_sample5.wav
