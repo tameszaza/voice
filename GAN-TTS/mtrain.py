@@ -171,11 +171,7 @@ def train(args):
             d_optimizer.step()
 
 
-            orthogonal_loss = sum(
-                torch.norm(encoder(output) - encoder(other_output))
-                for i, output in enumerate(generator_outputs)
-                for other_output in generator_outputs[i+1:]
-            )
+            orthogonal_loss = calculate_orthogonal_loss(encoder, generator_outputs) if len(generators) > 1 else 0.0
 
             for g_output, g_optimizer in zip(generator_outputs, g_optimizers):
                 fake_output = discriminator(g_output)
