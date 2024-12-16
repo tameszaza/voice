@@ -1,5 +1,5 @@
 import torch.nn as nn
-from modules import Conv1d  # Using your custom Conv1d module
+from .modules import Conv1d  # Using your custom Conv1d module
 
 class Encoder(nn.Module):
     def __init__(self, input_channels=1, feature_dim=128):
