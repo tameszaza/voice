@@ -148,15 +148,21 @@ def train(args):
             orthogonal_loss = calculate_orthogonal_loss(encoder, generator_outputs) if len(generators) > 1 else 0.0
 
             # Train generators
+            # Train generators
             for g_output, g_optimizer in zip(generator_outputs, g_optimizers):
                 fake_output = discriminator(g_output)
                 adv_loss = criterion(fake_output, torch.ones_like(fake_output))
                 sc_loss, mag_loss = stft_criterion(g_output.squeeze(1), samples.squeeze(1))
-                g_loss = adv_loss * args.lambda_adv + sc_loss + mag_loss + args.lambda_orth * orthogonal_loss
-
+                g_loss = adv_loss * args.lambda_adv + sc_loss + mag_loss
+            
+                # Include orthogonal loss only if multiple generators exist
+                if len(generators) > 1:
+                    g_loss += args.lambda_orth * orthogonal_loss
+            
                 g_optimizer.zero_grad()
-                g_loss.backward()
+                g_loss.backward(retain_graph=False)  # Fix: ensure graph is not reused
                 g_optimizer.step()
+
 
             global_step += 1
 
