@@ -1,6 +1,13 @@
 Tames:
 -generator architecture
 -recheck wave to audio
+-TTS generator 
+-try except fixed
+-fix the mGANs training code
+-resize dataset to medium size
+-data preprocesing
+-data preloader
+-evaluation
 Putter:
 mGASNs TTS
 --loss fx : Finish (use the same wasser )

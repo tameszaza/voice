@@ -11,3 +11,5 @@ gan_single_check.pth
 waveform_pre/
 preprocessed_data
 output/
+data_wav/
+GAN-TTS/data/
