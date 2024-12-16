@@ -121,9 +121,19 @@ def train(args):
             global_condition=False)
 
         train_loader = DataLoader(
-            train_dataset, collate_fn=collate, batch_size=args.batch_size,
-            num_workers=args.num_workers, shuffle=True, pin_memory=True)
+            train_dataset, collate_fn=collate, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=True, pin_memory=True)
+        
+        # Load external generator data
+        external_generator_loader = DataLoader(
+            CustomerDataset(args.external_generator_data, upsample_factor=hop_length, local_condition=True, global_condition=False),
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            shuffle=True,
+            pin_memory=True
+        )
+        external_iter = iter(external_generator_loader)
 
+        
         for batch, (samples, conditions) in enumerate(train_loader):
             batch_size = conditions.size(0)
             samples = samples.to(device)
@@ -133,24 +143,40 @@ def train(args):
             # Generate outputs
             generator_outputs = [g(conditions, z) for g in generators]
 
-            # Train discriminator
+            # Real data
             real_output = discriminator(samples)
+
+            # Fake data from internal generators
             fake_outputs = [discriminator(output.detach()) for output in generator_outputs]
 
+            # External generator data
+            try:
+                external_samples, _ = next(external_iter)
+            except StopIteration:
+                external_iter = iter(external_generator_loader)
+                external_samples, _ = next(external_iter)
+            external_samples = external_samples.to(device)
+            external_output = discriminator(external_samples)
+
+            # Discriminator loss
             real_loss = criterion(real_output, torch.ones_like(real_output))
             fake_loss = sum(criterion(fake, torch.zeros_like(fake)) for fake in fake_outputs) / len(fake_outputs)
-            d_loss = real_loss + fake_loss
+            external_loss = criterion(external_output, torch.zeros_like(external_output))
 
+            d_loss = real_loss + fake_loss + external_loss
+
+            # Update discriminator
             d_optimizer.zero_grad()
             d_loss.backward()
             d_optimizer.step()
 
-            # Calculate orthogonal loss
-            orthogonal_loss = calculate_orthogonal_loss(encoder, generator_outputs) if len(generators) > 1 else 0.0
 
-            # Train generators
-            # Train generators
-            # Train generators
+            orthogonal_loss = sum(
+                torch.norm(encoder(output) - encoder(other_output))
+                for i, output in enumerate(generator_outputs)
+                for other_output in generator_outputs[i+1:]
+            )
+
             for g_output, g_optimizer in zip(generator_outputs, g_optimizers):
                 fake_output = discriminator(g_output)
                 adv_loss = criterion(fake_output, torch.ones_like(fake_output))
@@ -190,22 +216,22 @@ def main():
     parser.add_argument('--input', type=str, default='data/train', help='Directory of training data')
     parser.add_argument('--checkpoint_dir', type=str, default="logdir", help="Directory to save model")
     parser.add_argument('--single_checkpoint', type=str, default=None, help="Path to single-generator checkpoint")
-    parser.add_argument('--mgan_checkpoint', type=str, default=None, help="Path to MGAN checkpoint to resume training")
-    parser.add_argument('--num_generators', type=int, default=2, help="Number of generators in MGAN")
-    parser.add_argument('--epochs', type=int, default=1000, help="Number of training epochs")
-    parser.add_argument('--batch_size', type=int, default=32, help="Batch size for training")
-    parser.add_argument('--g_learning_rate', type=float, default=0.0001, help="Learning rate for generators")
-    parser.add_argument('--d_learning_rate', type=float, default=0.0001, help="Learning rate for discriminator")
-    parser.add_argument('--z_dim', type=int, default=128, help="Latent space dimensionality")
-    parser.add_argument('--local_condition_dim', type=int, default=80, help="Local conditioning dimensionality")
-    parser.add_argument('--lambda_adv', type=float, default=1.0, help="Weight for adversarial loss")
-    parser.add_argument('--lambda_orth', type=float, default=0.1, help="Weight for orthogonal loss")
-    parser.add_argument('--checkpoint_step', type=int, default=5000, help="Steps between saving checkpoints")
-    parser.add_argument('--summary_step', type=int, default=100, help="Steps between logging summaries")
-    parser.add_argument('--use_cuda', type=bool, default=True, help="Use GPU for training")
-    parser.add_argument('--num_workers', type=int, default=4, help="Number of workers for data loading")
+    parser.add_argument('--mgan_checkpoint', type=str, default=None, help="Path to MGAN checkpoint")
+    parser.add_argument('--num_workers', type=int, default=4)
+    parser.add_argument('--epochs', type=int, default=1000)
+    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--g_learning_rate', type=float, default=0.0001)
+    parser.add_argument('--d_learning_rate', type=float, default=0.0001)
+    parser.add_argument('--z_dim', type=int, default=128)
+    parser.add_argument('--local_condition_dim', type=int, default=80)
+    parser.add_argument('--use_cuda', type=bool, default=True)
+    parser.add_argument('--num_generators', type=int, default=2)
+    parser.add_argument('--lambda_adv', type=float, default=1.0)
+    parser.add_argument('--lambda_orth', type=float, default=0.1)
+    parser.add_argument('--checkpoint_step', type=int, default=5000)
+    parser.add_argument('--summary_step', type=int, default=100)
     parser.add_argument('--condition_window', type=int, default=100, help="Conditioning window size")
-
+    parser.add_argument('--external_generator_data', type=str, required=True, help="Path to external generator .wav data")
 
     args = parser.parse_args()
     train(args)
