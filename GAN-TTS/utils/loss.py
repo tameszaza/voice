@@ -7,18 +7,24 @@ def stft(x, fft_size, hop_size, win_size, window):
 
     Args:
         x: Input signal tensor (B, T).
+        fft_size: FFT size.
+        hop_size: Hop size for STFT.
+        win_size: Window size.
+        window: STFT window.
 
     Returns:
         Tensor: Magnitude spectrogram (B, T, fft_size // 2 + 1).
-
     """
-    x_stft = torch.stft(x, fft_size, hop_size, win_size, window)
+    # Ensure the window tensor is on the same device as x
+    window = window.to(x.device)
+    x_stft = torch.stft(x, fft_size, hop_size, win_size, window, return_complex=False)
     real = x_stft[..., 0]
     imag = x_stft[..., 1]
-    outputs = torch.clamp(real ** 2 + imag ** 2, min=1e-7).transpose(2, 1)
+    outputs = torch.clamp(real**2 + imag**2, min=1e-7).transpose(2, 1)
     outputs = torch.sqrt(outputs)
 
-    return outputs 
+    return outputs
+
 
 class SpectralConvergence(nn.Module):
     def __init__(self):
@@ -43,25 +49,21 @@ class LogSTFTMagnitude(nn.Module):
         return outputs
 
 class STFTLoss(nn.Module):
-    def __init__(self,
-                 fft_size=1024,
-                 hop_size=120,
-                 win_size=600):
+    def __init__(self, fft_size=1024, hop_size=120, win_size=600):
         super(STFTLoss, self).__init__()
         
         self.fft_size = fft_size
         self.hop_size = hop_size
         self.win_size = win_size
-        self.window = torch.hann_window(win_size)
+        self.register_buffer('window', torch.hann_window(win_size))  # Register window for device movement
         self.sc_loss = SpectralConvergence()
         self.mag = LogSTFTMagnitude()
-        
     
     def forward(self, predicts, targets):
         """
         Args:
-            x: predicted signal (B, T).
-            y: truth signal (B, T).
+            predicts: Predicted signal (B, T).
+            targets: True signal (B, T).
 
         Returns:
             Tensor: STFT loss values.

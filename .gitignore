@@ -13,3 +13,4 @@ preprocessed_data
 output/
 data_wav/
 GAN-TTS/data/
+GAN-TTS/logdir
