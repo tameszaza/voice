@@ -40,8 +40,8 @@ def load_checkpoint(checkpoint_path, device):
     else:
         raise FileNotFoundError(f"Checkpoint not found at {checkpoint_path}")
 def calculate_orthogonal_loss(encoder, generator_outputs):
-    """Calculate the orthogonal loss between outputs of multiple generators."""
-    features = [encoder(output) for output in generator_outputs]
+    """Calculate orthogonal loss between generator outputs."""
+    features = [encoder(output.detach()) for output in generator_outputs]
     orthogonal_loss = 0
     for i in range(len(features)):
         for j in range(i + 1, len(features)):
@@ -50,6 +50,7 @@ def calculate_orthogonal_loss(encoder, generator_outputs):
             norm_product = (f_i.norm(dim=1) * f_j.norm(dim=1))
             orthogonal_loss += (inner_product / norm_product).mean()
     return orthogonal_loss
+
 def restore_optimizers(g_optimizers, d_optimizer, checkpoint):
     """Restore the optimizer states from a checkpoint."""
     for idx, opt in enumerate(g_optimizers):
@@ -149,18 +150,23 @@ def train(args):
 
             # Train generators
             # Train generators
+            # Train generators
             for g_output, g_optimizer in zip(generator_outputs, g_optimizers):
                 fake_output = discriminator(g_output)
                 adv_loss = criterion(fake_output, torch.ones_like(fake_output))
                 sc_loss, mag_loss = stft_criterion(g_output.squeeze(1), samples.squeeze(1))
+            
+                # Compute the total loss for the current generator
                 g_loss = adv_loss * args.lambda_adv + sc_loss + mag_loss
             
-                # Include orthogonal loss only if multiple generators exist
+                # Calculate orthogonal loss if multiple generators are present
                 if len(generators) > 1:
+                    orthogonal_loss = calculate_orthogonal_loss(encoder, generator_outputs)
                     g_loss += args.lambda_orth * orthogonal_loss
             
+                # Backpropagation and optimization
                 g_optimizer.zero_grad()
-                g_loss.backward(retain_graph=False)  # Fix: ensure graph is not reused
+                g_loss.backward(retain_graph=True if len(generators) > 1 else False)  # Retain graph for orthogonal loss
                 g_optimizer.step()
 
 
@@ -170,10 +176,14 @@ def train(args):
             if global_step % args.checkpoint_step == 0:
                 save_checkpoint(args, generators, discriminator, encoder, g_optimizers, d_optimizer, global_step)
 
-            # Log progress
+            
             if global_step % args.summary_step == 0:
                 print(f"Step {global_step}: D Loss: {d_loss.item():.4f}, "
-                      f"Orthogonal Loss: {orthogonal_loss:.4f}")
+                      f"Orthogonal Loss: {orthogonal_loss:.4f} (if applicable), "
+                      f"Adv Loss: {adv_loss.item():.4f}, "
+                      f"SC Loss: {sc_loss.item():.4f}, "
+                      f"Mag Loss: {mag_loss.item():.4f}")
+
 
 def main():
     parser = argparse.ArgumentParser()
