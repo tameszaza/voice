@@ -15,6 +15,7 @@ from utils.optimizer import Optimizer
 from utils.audio import hop_length
 from utils.loss import MultiResolutionSTFTLoss
 
+
 def load_checkpoint(checkpoint_path, device):
     print(f"Loading checkpoint from {checkpoint_path}")
     return torch.load(checkpoint_path, map_location=device)
