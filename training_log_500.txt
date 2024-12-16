@@ -143,3 +143,15 @@ task: <Task pending name='Task-2' coro=<Kernel.poll_control_queue() running at /
 2024-12-15 22:21:12 Init
 2024-12-15 22:21:12 Loading checkpoint...
 2024-12-15 22:21:12 Resumed from epoch 13
+2024-12-16 02:02:30 Epoch [1/20] Loss D: -1.2208, Loss G: 24.6739
+2024-12-16 02:02:30 Saved output/waveform_pre_500_scaled_noise/epoch1_gen1_sample1.wav
+2024-12-16 02:02:30 Saved output/waveform_pre_500_scaled_noise/epoch1_gen1_sample2.wav
+2024-12-16 02:02:30 Saved output/waveform_pre_500_scaled_noise/epoch1_gen1_sample3.wav
+2024-12-16 02:02:30 Saved output/waveform_pre_500_scaled_noise/epoch1_gen1_sample4.wav
+2024-12-16 02:02:30 Saved output/waveform_pre_500_scaled_noise/epoch1_gen1_sample5.wav
+2024-12-16 05:50:15 Epoch [2/20] Loss D: -1.1860, Loss G: 6.7803
+2024-12-16 05:50:15 Saved output/waveform_pre_500_scaled_noise/epoch2_gen1_sample1.wav
+2024-12-16 05:50:15 Saved output/waveform_pre_500_scaled_noise/epoch2_gen1_sample2.wav
+2024-12-16 05:50:15 Saved output/waveform_pre_500_scaled_noise/epoch2_gen1_sample3.wav
+2024-12-16 05:50:15 Saved output/waveform_pre_500_scaled_noise/epoch2_gen1_sample4.wav
+2024-12-16 05:50:15 Saved output/waveform_pre_500_scaled_noise/epoch2_gen1_sample5.wav

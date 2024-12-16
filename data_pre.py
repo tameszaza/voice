@@ -29,6 +29,6 @@ def convert_flac_to_wav(input_dir, output_dir):
                     print(f"Failed to convert {flac_path}: {e}")
 
 if __name__ == "__main__":
-    input_directory = "./data"
+    input_directory = "./data_small"
     output_directory = "./data_wav"
     convert_flac_to_wav(input_directory, output_directory)
