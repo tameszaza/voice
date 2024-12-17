@@ -1,4 +1,6 @@
 # GAN-TTS
+python process_generator.py --wav_dir /path/to/wav_files --output_dir /path/to/output_data --num_workers 4
+
 A pytorch implementation of the GAN-TTS: HIGH FIDELITY SPEECH SYNTHESIS WITH ADVERSARIAL NETWORKS(https://arxiv.org/pdf/1909.11646.pdf)
 
 ![](./images/gan-tts.jpg)
