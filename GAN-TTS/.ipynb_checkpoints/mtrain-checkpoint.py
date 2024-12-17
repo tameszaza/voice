@@ -15,6 +15,9 @@ from utils.optimizer import Optimizer
 from utils.audio import hop_length
 from utils.loss import MultiResolutionSTFTLoss
 import torch
+from torchmetrics.classification import BinaryAccuracy, BinaryPrecision, BinaryRecall, BinaryF1Score
+
+
 
 def save_checkpoint(args, generators, discriminator, encoder, g_optimizers, d_optimizer, step):
     """Save the current state of the MGAN training."""
@@ -91,13 +94,26 @@ def initialize_models(args, device):
     return generators, discriminator, encoder, global_step
 
 def train(args):
+    device = torch.device("cuda" if args.use_cuda else "cpu")
+    # Initialize TensorBoard SummaryWriter
+    writer = SummaryWriter(log_dir=args.checkpoint_dir)
+    accuracy = BinaryAccuracy().to(device)
+    precision = BinaryPrecision().to(device)
+    recall = BinaryRecall().to(device)
+    f1_score = BinaryF1Score().to(device)
+
     os.makedirs(args.checkpoint_dir, exist_ok=True)
 
-    # Dataset and DataLoader
+    # Initialize Dataset and DataLoader
     train_dataset = CustomerDataset(
-        args.input, upsample_factor=hop_length, local_condition=True, global_condition=False)
+        args.input, upsample_factor=hop_length, local_condition=True, global_condition=False
+    )
+    external_dataset = CustomerDataset(
+        args.external_generator_data, upsample_factor=hop_length, local_condition=True, global_condition=False
+    )
 
-    device = torch.device("cuda" if args.use_cuda else "cpu")
+    
+    
     generators, discriminator, encoder, global_step = initialize_models(args, device)
 
     for g in generators:
@@ -114,16 +130,26 @@ def train(args):
     criterion = nn.MSELoss().to(device)
 
     for epoch in range(args.epochs):
+        # Create the CustomerCollate object
         collate = CustomerCollate(
             upsample_factor=hop_length,
             condition_window=args.condition_window,
             local_condition=True,
-            global_condition=False)
-
+            global_condition=False
+        )
+    
+        # Initialize DataLoaders with CustomerCollate
         train_loader = DataLoader(
-            train_dataset, collate_fn=collate, batch_size=args.batch_size,
-            num_workers=args.num_workers, shuffle=True, pin_memory=True)
+            train_dataset, collate_fn=collate, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=True, pin_memory=True
+        )
+        external_loader = DataLoader(
+            external_dataset, collate_fn=collate, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=True, pin_memory=True
+        )
 
+
+        external_iter = iter(external_loader)
+
+        
         for batch, (samples, conditions) in enumerate(train_loader):
             batch_size = conditions.size(0)
             samples = samples.to(device)
@@ -133,24 +159,36 @@ def train(args):
             # Generate outputs
             generator_outputs = [g(conditions, z) for g in generators]
 
-            # Train discriminator
+            # Real data
             real_output = discriminator(samples)
+
+            # Fake data from internal generators
             fake_outputs = [discriminator(output.detach()) for output in generator_outputs]
 
+            # External generator data
+            try:
+                external_samples, _ = next(external_iter)
+            except StopIteration:
+                external_iter = iter(external_generator_loader)
+                external_samples, _ = next(external_iter)
+            external_samples = external_samples.to(device)
+            external_output = discriminator(external_samples)
+
+            # Discriminator loss
             real_loss = criterion(real_output, torch.ones_like(real_output))
             fake_loss = sum(criterion(fake, torch.zeros_like(fake)) for fake in fake_outputs) / len(fake_outputs)
-            d_loss = real_loss + fake_loss
+            external_loss = criterion(external_output, torch.zeros_like(external_output))
 
+            d_loss = real_loss + fake_loss + external_loss
+
+            # Update discriminator
             d_optimizer.zero_grad()
             d_loss.backward()
             d_optimizer.step()
 
-            # Calculate orthogonal loss
+
             orthogonal_loss = calculate_orthogonal_loss(encoder, generator_outputs) if len(generators) > 1 else 0.0
 
-            # Train generators
-            # Train generators
-            # Train generators
             for g_output, g_optimizer in zip(generator_outputs, g_optimizers):
                 fake_output = discriminator(g_output)
                 adv_loss = criterion(fake_output, torch.ones_like(fake_output))
@@ -169,6 +207,55 @@ def train(args):
                 g_loss.backward(retain_graph=True if len(generators) > 1 else False)  # Retain graph for orthogonal loss
                 g_optimizer.step()
 
+           
+
+            # Log metrics
+            if global_step % 100 == 0:
+                # Discriminator Metrics
+                real_acc = accuracy(real_output, torch.ones_like(real_output))
+                fake_acc = accuracy(fake_outputs[0], torch.zeros_like(fake_outputs[0]))
+                ext_acc = accuracy(external_output, torch.zeros_like(external_output))
+                
+                real_prec = precision(real_output, torch.ones_like(real_output))
+                real_rec = recall(real_output, torch.ones_like(real_output))
+                real_f1 = f1_score(real_output, torch.ones_like(real_output))
+    
+                fake_prec = precision(fake_outputs[0], torch.zeros_like(fake_outputs[0]))
+                fake_rec = recall(fake_outputs[0], torch.zeros_like(fake_outputs[0]))
+                fake_f1 = f1_score(fake_outputs[0], torch.zeros_like(fake_outputs[0]))
+                writer.add_scalar('Loss/Discriminator_Total', d_loss.item(), global_step)
+                writer.add_scalar('Loss/Discriminator_Real', real_loss.item(), global_step)
+                writer.add_scalar('Loss/Discriminator_Fake', fake_loss.item(), global_step)
+                writer.add_scalar('Loss/Discriminator_External', external_loss.item(), global_step)
+                
+                writer.add_scalar('Metrics/Accuracy_Real', real_acc, global_step)
+                writer.add_scalar('Metrics/Accuracy_Fake', fake_acc, global_step)
+                writer.add_scalar('Metrics/Accuracy_External', ext_acc, global_step)
+                
+                writer.add_scalar('Metrics/Precision_Real', real_prec, global_step)
+                writer.add_scalar('Metrics/Recall_Real', real_rec, global_step)
+                writer.add_scalar('Metrics/F1_Real', real_f1, global_step)
+
+                writer.add_scalar('Metrics/Precision_Fake', fake_prec, global_step)
+                writer.add_scalar('Metrics/Recall_Fake', fake_rec, global_step)
+                writer.add_scalar('Metrics/F1_Fake', fake_f1, global_step)
+                # Log Discriminator Loss
+                writer.add_scalar('Loss/Discriminator', d_loss.item(), global_step)
+                
+                # Log Generator Losses
+                writer.add_scalar('Loss/Generator_Adv', adv_loss.item(), global_step)
+                writer.add_scalar('Loss/Generator_SC', sc_loss.item(), global_step)
+                writer.add_scalar('Loss/Generator_Mag', mag_loss.item(), global_step)
+                
+                # Log Orthogonal Loss (only if applicable)
+                if len(generators) > 1:
+                    writer.add_scalar('Loss/Orthogonal', orthogonal_loss, global_step)
+                
+                # Optionally log other metrics like Learning Rate or Gradients if needed
+                for i, g_optimizer in enumerate(g_optimizers):
+                    writer.add_scalar(f'LR/Generator_{i}', g_optimizer.param_groups[0]['lr'], global_step)
+                
+                writer.add_scalar('LR/Discriminator', d_optimizer.param_groups[0]['lr'], global_step)
 
             global_step += 1
 
@@ -179,7 +266,7 @@ def train(args):
             
             if global_step % args.summary_step == 0:
                 print(f"Step {global_step}: D Loss: {d_loss.item():.4f}, "
-                      f"Orthogonal Loss: {orthogonal_loss:.4f} (if applicable), "
+                      f"Orthogonal Loss: {orthogonal_loss:.4f} "
                       f"Adv Loss: {adv_loss.item():.4f}, "
                       f"SC Loss: {sc_loss.item():.4f}, "
                       f"Mag Loss: {mag_loss.item():.4f}")
@@ -188,24 +275,24 @@ def train(args):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--input', type=str, default='data/train', help='Directory of training data')
-    parser.add_argument('--checkpoint_dir', type=str, default="logdir", help="Directory to save model")
+    parser.add_argument('--checkpoint_dir', type=str, default="logdir2", help="Directory to save model")
     parser.add_argument('--single_checkpoint', type=str, default=None, help="Path to single-generator checkpoint")
-    parser.add_argument('--mgan_checkpoint', type=str, default=None, help="Path to MGAN checkpoint to resume training")
-    parser.add_argument('--num_generators', type=int, default=2, help="Number of generators in MGAN")
-    parser.add_argument('--epochs', type=int, default=1000, help="Number of training epochs")
-    parser.add_argument('--batch_size', type=int, default=32, help="Batch size for training")
-    parser.add_argument('--g_learning_rate', type=float, default=0.0001, help="Learning rate for generators")
-    parser.add_argument('--d_learning_rate', type=float, default=0.0001, help="Learning rate for discriminator")
-    parser.add_argument('--z_dim', type=int, default=128, help="Latent space dimensionality")
-    parser.add_argument('--local_condition_dim', type=int, default=80, help="Local conditioning dimensionality")
-    parser.add_argument('--lambda_adv', type=float, default=1.0, help="Weight for adversarial loss")
-    parser.add_argument('--lambda_orth', type=float, default=0.1, help="Weight for orthogonal loss")
-    parser.add_argument('--checkpoint_step', type=int, default=5000, help="Steps between saving checkpoints")
-    parser.add_argument('--summary_step', type=int, default=100, help="Steps between logging summaries")
-    parser.add_argument('--use_cuda', type=bool, default=True, help="Use GPU for training")
-    parser.add_argument('--num_workers', type=int, default=4, help="Number of workers for data loading")
+    parser.add_argument('--mgan_checkpoint', type=str, default=None, help="Path to MGAN checkpoint")
+    parser.add_argument('--num_workers', type=int, default=4)
+    parser.add_argument('--epochs', type=int, default=1000)
+    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--g_learning_rate', type=float, default=0.0001)
+    parser.add_argument('--d_learning_rate', type=float, default=0.0001)
+    parser.add_argument('--z_dim', type=int, default=128)
+    parser.add_argument('--local_condition_dim', type=int, default=80)
+    parser.add_argument('--use_cuda', type=bool, default=True)
+    parser.add_argument('--num_generators', type=int, default=2)
+    parser.add_argument('--lambda_adv', type=float, default=0.01)
+    parser.add_argument('--lambda_orth', type=float, default=0.1)
+    parser.add_argument('--checkpoint_step', type=int, default=5000)
+    parser.add_argument('--summary_step', type=int, default=1)
     parser.add_argument('--condition_window', type=int, default=100, help="Conditioning window size")
-
+    parser.add_argument('--external_generator_data', type=str, required=True, help="Path to external generator .wav data")
 
     args = parser.parse_args()
     train(args)

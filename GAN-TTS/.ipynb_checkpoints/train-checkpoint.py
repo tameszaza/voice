@@ -158,6 +158,34 @@ def train(args):
                 d_loss.backward()
                 nn.utils.clip_grad_norm_(d_parameters, max_norm=0.5)
                 customer_d_optimizer.step_and_update_lr()
+                # Log discriminator metrics every 100 steps
+                if global_step % 100 == 0:
+                    with torch.no_grad():  # Disable gradients for evaluation
+                        # Metrics calculation with threshold=0.5
+                        real_preds = (real_output > 0.5).float()
+                        fake_preds = (fake_output <= 0.5).float()
+                        true_real = torch.ones_like(real_output)
+                        true_fake = torch.zeros_like(fake_output)
+
+                        # Accuracy
+                        real_accuracy = (real_preds == true_real).float().mean()
+                        fake_accuracy = (fake_preds == true_fake).float().mean()
+                        accuracy = (real_accuracy + fake_accuracy) / 2
+
+                        # Precision and Recall
+                        true_positives = (real_preds * true_real).sum()
+                        false_negatives = ((1 - real_preds) * true_real).sum()
+                        false_positives = (fake_preds * true_fake).sum()
+
+                        precision = true_positives / (true_positives + false_positives + 1e-8)
+                        recall = true_positives / (true_positives + false_negatives + 1e-8)
+
+                        # Log metrics to TensorBoard
+                        writer.add_scalar('discriminator/real_accuracy', real_accuracy.item(), global_step)
+                        writer.add_scalar('discriminator/fake_accuracy', fake_accuracy.item(), global_step)
+                        writer.add_scalar('discriminator/overall_accuracy', accuracy.item(), global_step)
+                        writer.add_scalar('discriminator/precision', precision.item(), global_step)
+                        writer.add_scalar('discriminator/recall', recall.item(), global_step)
             else:
                 d_loss = torch.Tensor([0])
                 fake_loss = torch.Tensor([0])

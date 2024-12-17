@@ -11,12 +11,12 @@ from tqdm import tqdm
 import random
 
 train_rate = 0.9995
-test_rate = 0.0005
+test_rate  = 0.0005
 
-def find_files(path, pattern="*.wav"):
+def find_files(path, pattren="*.wav"):
     filenames = []
-    for filename in glob.iglob(f'{path}/**/*{pattern}', recursive=True):
-        filenames.append(filename)
+    for filename in glob.iglob(f'{path}/**/*{pattren}', recursive=True):
+       filenames.append(filename)
     return filenames
 
 def data_prepare(audio_path, mel_path, wav_file):
@@ -25,56 +25,33 @@ def data_prepare(audio_path, mel_path, wav_file):
     np.save(mel_path, mel, allow_pickle=False)
     return audio_path, mel_path, mel.shape[0]
 
-def process(output_dir, wav_files, train_dir, test_dir, num_workers, max_hours):
+def process(output_dir, wav_files, train_dir, test_dir,  num_workers):
     executor = ProcessPoolExecutor(max_workers=num_workers)
     results = []
     names = []
-    total_frames = 0
-    max_frames = int((max_hours * 3600 * 1000) / (hop_length * 1000 / sample_rate))
 
     random.shuffle(wav_files)
     train_num = int(len(wav_files) * train_rate)
 
-    # Process training files
-    for wav_file in tqdm(wav_files[:train_num], desc="Processing Training Data"):
-        if total_frames >= max_frames:
-            print("Reached maximum audio duration limit for training data.")
-            break
-
-        fid = os.path.basename(wav_file).replace('.wav', '.npy')
-        audio_path = os.path.join(train_dir, "audio", fid)
-        mel_path = os.path.join(train_dir, "mel", fid)
-
-        result = data_prepare(audio_path, mel_path, wav_file)
-        total_frames += result[2]
+    for wav_file in wav_files[0 : train_num]:
+        fid = os.path.basename(wav_file).replace('.wav','.npy')
         names.append(fid)
-
-        results.append(result)
+        results.append(executor.submit(partial(data_prepare, os.path.join(train_dir, "audio", fid), os.path.join(train_dir, "mel", fid), wav_file)))
 
     with open(os.path.join(output_dir, "train", 'names.pkl'), 'wb') as f:
         pickle.dump(names, f)
 
-    # Process testing files
     names = []
-    for wav_file in tqdm(wav_files[train_num:], desc="Processing Testing Data"):
-        if total_frames >= max_frames:
-            print("Reached maximum audio duration limit for testing data.")
-            break
-
-        fid = os.path.basename(wav_file).replace('.wav', '.npy')
-        audio_path = os.path.join(test_dir, "audio", fid)
-        mel_path = os.path.join(test_dir, "mel", fid)
-
-        result = data_prepare(audio_path, mel_path, wav_file)
-        total_frames += result[2]
+    for wav_file in wav_files[train_num : len(wav_files)]:
+        fid = os.path.basename(wav_file).replace('.wav','.npy')
         names.append(fid)
-
-        results.append(result)
+        results.append(executor.submit(partial(data_prepare, os.path.join(test_dir, "audio", fid), os.path.join(test_dir, "mel", fid), wav_file)))
 
     with open(os.path.join(output_dir, "test", 'names.pkl'), 'wb') as f:
         pickle.dump(names, f)
 
-    return results
+
+    return [result.result() for result in tqdm(results)]
 
 def preprocess(args):
     train_dir = os.path.join(args.output, 'train')
@@ -88,14 +65,13 @@ def preprocess(args):
     os.makedirs(os.path.join(test_dir, "mel"), exist_ok=True)
 
     wav_files = find_files(args.wav_dir)
-    metadata = process(args.output, wav_files, train_dir, test_dir, args.num_workers, args.max_hours)
+    metadata = process(args.output, wav_files, train_dir, test_dir, args.num_workers)
     write_metadata(metadata, args.output)
 
 def write_metadata(metadata, out_dir):
     with open(os.path.join(out_dir, 'metadata.txt'), 'w', encoding='utf-8') as f:
         for m in metadata:
             f.write('|'.join([str(x) for x in m]) + '\n')
-
     frames = sum([m[2] for m in metadata])
     frame_shift_ms = hop_length * 1000 / sample_rate
     hours = frames * frame_shift_ms / (3600 * 1000)
@@ -103,10 +79,10 @@ def write_metadata(metadata, out_dir):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--wav_dir', default='wavs', help="Directory containing .wav files.")
-    parser.add_argument('--output', default='data', help="Output directory for processed files.")
-    parser.add_argument('--num_workers', type=int, default=int(cpu_count()), help="Number of worker threads.")
-    parser.add_argument('--max_hours', type=float, default=None, help="Maximum total duration (in hours) to process.")
+    parser.add_argument('--wav_dir', default='wavs')
+    parser.add_argument('--output', default='data')
+    parser.add_argument('--num_workers', type=int, default=int(cpu_count()))
+    parser.add_argument('--train_rate', type=float, default=0.9995)
     args = parser.parse_args()
     preprocess(args)
 
