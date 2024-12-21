@@ -179,7 +179,7 @@ def train(args):
             fake_loss = sum(criterion(fake, torch.zeros_like(fake)) for fake in fake_outputs) / len(fake_outputs)
             external_loss = criterion(external_output, torch.zeros_like(external_output))
 
-            d_loss = real_loss + fake_loss + external_loss
+            d_loss = real_loss + args.lambda_fake*fake_loss + args.lambda_ex*external_loss
 
             # Update discriminator
             d_optimizer.zero_grad()
@@ -188,14 +188,16 @@ def train(args):
 
 
             orthogonal_loss = calculate_orthogonal_loss(encoder, generator_outputs) if len(generators) > 1 else 0.0
+            total_generator_loss = 0
+            generator_logs = {}
 
-            for g_output, g_optimizer in zip(generator_outputs, g_optimizers):
+            for i, (g_output, g_optimizer) in enumerate(zip(generator_outputs, g_optimizers)):
                 fake_output = discriminator(g_output)
                 adv_loss = criterion(fake_output, torch.ones_like(fake_output))
                 sc_loss, mag_loss = stft_criterion(g_output.squeeze(1), samples.squeeze(1))
             
                 # Compute the total loss for the current generator
-                g_loss = adv_loss * args.lambda_adv + sc_loss + mag_loss
+                g_loss = adv_loss * args.lambda_adv + sc_loss + args.lambda_mag * mag_loss
             
                 # Calculate orthogonal loss if multiple generators are present
                 if len(generators) > 1:
@@ -207,56 +209,59 @@ def train(args):
                 g_loss.backward(retain_graph=True if len(generators) > 1 else False)  # Retain graph for orthogonal loss
                 g_optimizer.step()
 
-           
-
-            # Log metrics
-            if global_step % 100 == 0:
-                # Discriminator Metrics
-                real_acc = accuracy(real_output, torch.ones_like(real_output))
-                fake_acc = accuracy(fake_outputs[0], torch.zeros_like(fake_outputs[0]))
-                ext_acc = accuracy(external_output, torch.zeros_like(external_output))
-                
-                real_prec = precision(real_output, torch.ones_like(real_output))
-                real_rec = recall(real_output, torch.ones_like(real_output))
-                real_f1 = f1_score(real_output, torch.ones_like(real_output))
+               # Add generator loss to total generator loss
+                total_generator_loss += g_loss.item()
     
-                fake_prec = precision(fake_outputs[0], torch.zeros_like(fake_outputs[0]))
-                fake_rec = recall(fake_outputs[0], torch.zeros_like(fake_outputs[0]))
-                fake_f1 = f1_score(fake_outputs[0], torch.zeros_like(fake_outputs[0]))
+                # Log generator-specific losses
+                generator_logs[f'Generator_{i}_Total'] = g_loss.item()
+                generator_logs[f'Generator_{i}_Adv'] = adv_loss.item()
+                generator_logs[f'Generator_{i}_SC'] = sc_loss.item()
+                generator_logs[f'Generator_{i}_Mag'] = mag_loss.item()
+    
+            # Log metrics every 100 steps
+            if global_step % 100 == 0:
+                real_preds = (real_output > 0.5).float().view(-1)
+                fake_preds = torch.cat([(fake > 0.5).float().view(-1) for fake in fake_outputs], dim=0)
+                external_preds = (external_output > 0.5).float().view(-1)
+                
+                real_targets = torch.ones_like(real_preds)
+                fake_targets = torch.zeros_like(fake_preds)
+                external_targets = torch.zeros_like(external_preds)
+                
+                # Combine all predictions and targets
+                all_preds = torch.cat([real_preds, fake_preds, external_preds], dim=0)
+                all_targets = torch.cat([real_targets, fake_targets, external_targets], dim=0)
+
+
+                # Calculate overall metrics
+                total_precision = precision(all_preds, all_targets)
+                total_recall = recall(all_preds, all_targets)
+                total_f1 = f1_score(all_preds, all_targets)
+                total_accuracy = accuracy(all_preds, all_targets)
+
+                # Log discriminator losses
                 writer.add_scalar('Loss/Discriminator_Total', d_loss.item(), global_step)
                 writer.add_scalar('Loss/Discriminator_Real', real_loss.item(), global_step)
                 writer.add_scalar('Loss/Discriminator_Fake', fake_loss.item(), global_step)
                 writer.add_scalar('Loss/Discriminator_External', external_loss.item(), global_step)
-                
-                writer.add_scalar('Metrics/Accuracy_Real', real_acc, global_step)
-                writer.add_scalar('Metrics/Accuracy_Fake', fake_acc, global_step)
-                writer.add_scalar('Metrics/Accuracy_External', ext_acc, global_step)
-                
-                writer.add_scalar('Metrics/Precision_Real', real_prec, global_step)
-                writer.add_scalar('Metrics/Recall_Real', real_rec, global_step)
-                writer.add_scalar('Metrics/F1_Real', real_f1, global_step)
 
-                writer.add_scalar('Metrics/Precision_Fake', fake_prec, global_step)
-                writer.add_scalar('Metrics/Recall_Fake', fake_rec, global_step)
-                writer.add_scalar('Metrics/F1_Fake', fake_f1, global_step)
-                # Log Discriminator Loss
-                writer.add_scalar('Loss/Discriminator', d_loss.item(), global_step)
-                
-                # Log Generator Losses
-                writer.add_scalar('Loss/Generator_Adv', adv_loss.item(), global_step)
-                writer.add_scalar('Loss/Generator_SC', sc_loss.item(), global_step)
-                writer.add_scalar('Loss/Generator_Mag', mag_loss.item(), global_step)
-                
-                # Log Orthogonal Loss (only if applicable)
+                # Log overall metrics
+                writer.add_scalar('Metrics/Discriminator_Precision', total_precision, global_step)
+                writer.add_scalar('Metrics/Discriminator_Recall', total_recall, global_step)
+                writer.add_scalar('Metrics/Discriminator_F1', total_f1, global_step)
+                writer.add_scalar('Metrics/Discriminator_Accuracy', total_accuracy, global_step)
+
+                # Log generator losses
+                for key, value in generator_logs.items():
+                    writer.add_scalar(f'Loss/{key}', value, global_step)
+
+                # Log orthogonal loss (if applicable)
                 if len(generators) > 1:
                     writer.add_scalar('Loss/Orthogonal', orthogonal_loss, global_step)
-                
-                # Optionally log other metrics like Learning Rate or Gradients if needed
-                for i, g_optimizer in enumerate(g_optimizers):
-                    writer.add_scalar(f'LR/Generator_{i}', g_optimizer.param_groups[0]['lr'], global_step)
-                
-                writer.add_scalar('LR/Discriminator', d_optimizer.param_groups[0]['lr'], global_step)
 
+                # Log total generator loss
+                writer.add_scalar('Loss/Generators_Total', total_generator_loss, global_step)
+    
             global_step += 1
 
             # Save checkpoint
@@ -278,7 +283,7 @@ def main():
     parser.add_argument('--checkpoint_dir', type=str, default="logdir2", help="Directory to save model")
     parser.add_argument('--single_checkpoint', type=str, default=None, help="Path to single-generator checkpoint")
     parser.add_argument('--mgan_checkpoint', type=str, default=None, help="Path to MGAN checkpoint")
-    parser.add_argument('--num_workers', type=int, default=4)
+    parser.add_argument('--num_workers', type=int, default=32)
     parser.add_argument('--epochs', type=int, default=1000)
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--g_learning_rate', type=float, default=0.0001)
@@ -287,9 +292,12 @@ def main():
     parser.add_argument('--local_condition_dim', type=int, default=80)
     parser.add_argument('--use_cuda', type=bool, default=True)
     parser.add_argument('--num_generators', type=int, default=2)
-    parser.add_argument('--lambda_adv', type=float, default=0.01)
+    parser.add_argument('--lambda_adv', type=float, default=0.02)
     parser.add_argument('--lambda_orth', type=float, default=0.1)
-    parser.add_argument('--checkpoint_step', type=int, default=5000)
+    parser.add_argument('--lambda_fake', type=float, default=1)
+    parser.add_argument('--lambda_mag', type=float, default=2)
+    parser.add_argument('--lambda_ex', type=float, default=1)
+    parser.add_argument('--checkpoint_step', type=int, default=10000)
     parser.add_argument('--summary_step', type=int, default=1)
     parser.add_argument('--condition_window', type=int, default=100, help="Conditioning window size")
     parser.add_argument('--external_generator_data', type=str, required=True, help="Path to external generator .wav data")

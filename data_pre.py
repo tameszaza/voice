@@ -40,8 +40,8 @@ def convert_flac_to_wav(input_dir, output_dir, num_workers=4):
         executor.map(lambda args: convert_single_file(*args), files_to_convert)
 
 if __name__ == "__main__":
-    input_directory = "./data_small"
-    output_directory = "./data_wav"
+    input_directory = "../tts/LA/ASVspoof2019_LA_dev"
+    output_directory = "./data_test_wav"
     num_threads = 32  # Adjust the number of threads based on your CPU
 
     convert_flac_to_wav(input_directory, output_directory, num_workers=num_threads)
