@@ -9,6 +9,58 @@ from tabulate import tabulate
 from sklearn.metrics import roc_auc_score, roc_curve
 import matplotlib.pyplot as plt
 
+from sklearn.metrics import precision_recall_curve
+
+# def plot_metrics_vs_threshold(all_probs, all_targets):
+#     """
+#     Plot F1, Accuracy, Precision, and Recall vs. Threshold in a single figure.
+#     """
+#     thresholds = np.linspace(0, 1, 100)  # Define thresholds from 0 to 1
+#     precisions = []
+#     recalls = []
+#     f1_scores = []
+#     accuracies = []
+
+#     for threshold in thresholds:
+#         # Convert probabilities to binary predictions
+#         preds = (all_probs >= threshold).astype(int)
+
+#         TP = ((preds == 1) & (all_targets == 1)).sum()
+#         TN = ((preds == 0) & (all_targets == 0)).sum()
+#         FP = ((preds == 1) & (all_targets == 0)).sum()
+#         FN = ((preds == 0) & (all_targets == 1)).sum()
+
+#         # Precision
+#         precision = TP / (TP + FP) if TP + FP > 0 else 0
+#         precisions.append(precision)
+
+#         # Recall
+#         recall = TP / (TP + FN) if TP + FN > 0 else 0
+#         recalls.append(recall)
+
+#         # F1 Score
+#         f1 = (2 * precision * recall) / (precision + recall) if precision + recall > 0 else 0
+#         f1_scores.append(f1)
+
+#         # Accuracy
+#         accuracy = (TP + TN) / (TP + TN + FP + FN) if TP + TN + FP + FN > 0 else 0
+#         accuracies.append(accuracy)
+
+#     # Plot metrics vs. thresholds
+#     plt.figure(figsize=(10, 6))
+#     plt.plot(thresholds, precisions, label="Precision", color="blue")
+#     plt.plot(thresholds, recalls, label="Recall", color="orange")
+#     plt.plot(thresholds, f1_scores, label="F1 Score", color="green")
+#     plt.plot(thresholds, accuracies, label="Accuracy", color="red")
+#     plt.xlabel("Threshold")
+#     plt.ylabel("Metric Value")
+#     plt.title("Metrics vs. Threshold")
+#     plt.legend(loc="lower left")
+#     plt.grid()
+#     plt.tight_layout()
+#     plt.savefig("./roc_plots/metrics_vs_threshold.png")
+#     plt.show()
+
 def preprocess_test_data(dataset_dir, condition_window, sample_window, upsample_factor, max_clips_per_class=None):
     """
     Preprocess the test datasets from real and fake folders.
@@ -18,7 +70,7 @@ def preprocess_test_data(dataset_dir, condition_window, sample_window, upsample_
     data = []
     labels = []
 
-    for label, folder in enumerate([ "fake", "real"]):
+    for label, folder in enumerate(["real",  "fake"]):
         folder_path = os.path.join(dataset_dir, folder)
         audio_files = [os.path.join(folder_path, f) for f in os.listdir(folder_path) if f.endswith('.wav')]
 
@@ -45,6 +97,7 @@ def preprocess_test_data(dataset_dir, condition_window, sample_window, upsample_
 
             data.append((audio, mel))
             labels.append(label)
+    labels = [1 - label for label in labels]
 
     print(f"Total preprocessed samples: {len(data)}")  # Debugging
     return data, labels
@@ -52,96 +105,147 @@ def preprocess_test_data(dataset_dir, condition_window, sample_window, upsample_
 
 
 
+
+
+
+def plot_metrics_vs_threshold(all_probs, all_targets):
+    """
+    Plot Precision, Recall, F1, and Accuracy vs. Threshold for Class 0.
+    """
+    thresholds = np.linspace(0, 1, 100)  # Define thresholds from 0 to 1
+    precisions = []
+    recalls = []
+    f1_scores = []
+    accuracies = []
+
+    for threshold in thresholds:
+        preds = (all_probs >= threshold).astype(int)
+
+        TP = ((preds == 0) & (all_targets == 0)).sum()
+        TN = ((preds == 1) & (all_targets == 1)).sum()
+        FP = ((preds == 0) & (all_targets == 1)).sum()
+        FN = ((preds == 1) & (all_targets == 0)).sum()
+
+        precision = TP / (TP + FP) if TP + FP > 0 else 0
+        recall = TP / (TP + FN) if TP + FN > 0 else 0
+        f1 = (2 * precision * recall) / (precision + recall) if precision + recall > 0 else 0
+        accuracy = (TP + TN) / (TP + TN + FP + FN) if TP + TN + FP + FN > 0 else 0
+
+        precisions.append(precision)
+        recalls.append(recall)
+        f1_scores.append(f1)
+        accuracies.append(accuracy)
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(thresholds, precisions, label="Precision (Class 0)", color="blue")
+    plt.plot(thresholds, recalls, label="Recall (Class 0)", color="orange")
+    plt.plot(thresholds, f1_scores, label="F1 Score (Class 0)", color="green")
+    plt.plot(thresholds, accuracies, label="Accuracy", color="red")
+    plt.xlabel("Threshold")
+    plt.ylabel("Metric Value")
+    plt.title("Metrics vs. Threshold (Class 0)")
+    plt.legend(loc="lower left")
+    plt.grid()
+    plt.tight_layout()
+    plt.savefig("./roc_plots/metrics_vs_threshold_class_0.png")
+    plt.show()
+
+
+import matplotlib.pyplot as plt
+from sklearn.metrics import roc_curve, auc
+
 def evaluate_discriminator(discriminator, test_data, test_labels, device):
     """
-    Evaluate the discriminator on the test datasets and print detailed metrics, including TP, TN, FP, FN.
-    Additionally, plot the ROC curve and calculate AUC.
+    Evaluate the discriminator on test datasets for Class 0, including ROC Curve.
     """
-
     output_dir = "./roc_plots"
-    os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
-    plot_path = os.path.join(output_dir, "roc_curve.png")
-    accuracy = BinaryAccuracy().to(device)
-    precision = BinaryPrecision().to(device)
-    recall = BinaryRecall().to(device)
-    f1_score = BinaryF1Score().to(device)
+    os.makedirs(output_dir, exist_ok=True)
 
-    all_preds = []
-    all_probs = []  # For storing probabilities
+    all_probs = []
     all_targets = []
 
+    # Evaluate each test sample
     for (audio, mel), label in tqdm(zip(test_data, test_labels), desc="Evaluating", total=len(test_data)):
-        # Convert to PyTorch tensors and move to the device
-        audio_tensor = torch.FloatTensor(audio).unsqueeze(0).unsqueeze(0).to(device)  # [1, 1, sample_window]
-        mel_tensor = torch.FloatTensor(mel).unsqueeze(0).permute(0, 2, 1).to(device)  # [1, condition_dim, condition_window]
+        audio_tensor = torch.FloatTensor(audio).unsqueeze(0).unsqueeze(0).to(device)
+        mel_tensor = torch.FloatTensor(mel).unsqueeze(0).permute(0, 2, 1).to(device)
 
-        # Get discriminator output
         with torch.no_grad():
-            output = discriminator(audio_tensor)  # Output shape: [1, 1, feature_dim]
-
-        # Reduce feature_dim (e.g., take the mean over the last dimension)
-        prob = output.mean(dim=-1).item()  # Single probability
-        pred = (prob > 0.5)  # Binary prediction
-
-        # Append probabilities, predictions, and targets
+            output = discriminator(audio_tensor)
+        
+        prob = output.mean(dim=-1).item()
         all_probs.append(prob)
-        all_preds.append(pred)
         all_targets.append(label)
 
-    # Convert lists to numpy arrays for compatibility with sklearn
+    # Convert to numpy arrays
     all_probs = np.array(all_probs)
-    all_preds = np.array(all_preds)
     all_targets = np.array(all_targets)
 
-    # Calculate ROC AUC
-    auc_score = roc_auc_score(all_targets, all_probs)
-    fpr, tpr, _ = roc_curve(all_targets, all_probs)
-
-    # Plot ROC curve
-    plt.figure(figsize=(8, 6))
-    plt.plot(fpr, tpr, color='blue', label=f'ROC Curve (AUC = {auc_score:.4f})')
-    plt.plot([0, 1], [0, 1], color='red', linestyle='--', label='Random Guess')
-    plt.xlabel('False Positive Rate')
-    plt.ylabel('True Positive Rate')
-    plt.title('Receiver Operating Characteristic (ROC) Curve')
-    plt.legend(loc="lower right")
-    plt.grid()
-    plt.show()
-    plt.savefig(plot_path)  # Save the plot to the directory
-    print(f"ROC curve saved to {plot_path}")
+    # Treat Class 0 as the positive class
+    # If probabilities are inverted, use this logic:
+    preds = (all_probs > 0.5).astype(int)  # Class 0 as positive
 
     # Calculate TP, TN, FP, FN
-    TP = ((all_preds == 1) & (all_targets == 1)).sum()
-    TN = ((all_preds == 0) & (all_targets == 0)).sum()
-    FP = ((all_preds == 1) & (all_targets == 0)).sum()
-    FN = ((all_preds == 0) & (all_targets == 1)).sum()
+    TP = ((preds == 0) & (all_targets == 0)).sum()  # True Positives (Class 0 correctly identified)
+    TN = ((preds == 1) & (all_targets == 1)).sum()  # True Negatives (Class 1 correctly identified)
+    FP = ((preds == 0) & (all_targets == 1)).sum()  # False Positives (Class 1 misclassified as Class 0)
+    FN = ((preds == 1) & (all_targets == 0)).sum()  # False Negatives (Class 0 misclassified as Class 1)
+
+    # Debugging print statements
+    print(f"TP: {TP}, TN: {TN}, FP: {FP}, FN: {FN}")
 
     # Calculate metrics
-    total_accuracy = accuracy(torch.tensor(all_preds), torch.tensor(all_targets)).item()
-    total_precision = precision(torch.tensor(all_preds), torch.tensor(all_targets)).item()
-    total_recall = recall(torch.tensor(all_preds), torch.tensor(all_targets)).item()
-    total_f1 = f1_score(torch.tensor(all_preds), torch.tensor(all_targets)).item()
+    precision = TP / (TP + FP) if TP + FP > 0 else 0
+    recall = TP / (TP + FN) if TP + FN > 0 else 0
+    f1 = (2 * precision * recall) / (precision + recall) if precision + recall > 0 else 0
+    accuracy = (TP + TN) / (TP + TN + FP + FN) if TP + TN + FP + FN > 0 else 0
 
-    # Display results in a table
-    headers = ["Metric", "Value"]
+    # Display results
     rows = [
-        ["True Positives (TP)", TP],
-        ["True Negatives (TN)", TN],
-        ["False Positives (FP)", FP],
-        ["False Negatives (FN)", FN],
-        ["Accuracy", f"{total_accuracy:.4f}"],
-        ["Precision", f"{total_precision:.4f}"],
-        ["Recall", f"{total_recall:.4f}"],
-        ["F1 Score", f"{total_f1:.4f}"],
-        ["ROC AUC", f"{auc_score:.4f}"]
+        ["Accuracy", f"{accuracy:.4f}"],
+        ["Precision (Class 0)", f"{precision:.4f}"],
+        ["Recall (Class 0)", f"{recall:.4f}"],
+        ["F1 Score (Class 0)", f"{f1:.4f}"]
     ]
-    print("\nEvaluation Results:")
-    print(tabulate(rows, headers=headers, tablefmt="grid"))
+    print("\nEvaluation Metrics for Class 0:")
+    print(tabulate(rows, headers=["Metric", "Value"], tablefmt="grid"))
+
+    # Compute ROC Curve for Class 0
+    fpr, tpr, thresholds = roc_curve(all_targets, 1 - all_probs, pos_label=0)  # Invert probabilities for Class 0
+    roc_auc = auc(fpr, tpr)
+
+    # Plot ROC Curve
+    plt.figure(figsize=(8, 6))
+    plt.plot(fpr, tpr, color="blue", label=f"ROC Curve (AUC = {roc_auc:.4f})")
+    plt.plot([0, 1], [0, 1], linestyle="--", color="gray", label="Random Guess")
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.title("ROC Curve for Class 0")
+    plt.legend(loc="lower right")
+    plt.grid()
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "roc_curve_class_0.png"))
+    plt.show()
+
+    # Plot metrics vs. threshold
+    plot_metrics_vs_threshold(all_probs, all_targets)
+
+
+
+def calculate_reverse_roc(all_probs, all_targets):
+    """
+    Calculate Reverse ROC points by swapping the target classes.
+    """
+    # Reverse the classes
+    reversed_targets = 1 - all_targets  # Swap 0 <-> 1
+    fpr, tpr, thresholds = roc_curve(reversed_targets, 1 - all_probs)  # Flip probabilities too
+    return fpr, tpr
+
 
 
 def main():
     dataset_dir = "../data_eval"  # Root directory containing real/ and fake/ folders
-    checkpoint_path = "logdir2/mgan_step_1340000.pth"
+    # checkpoint_path = "logdir2/mgan_step_930000.pth"
+    checkpoint_path = "logdir2/mgan_step_1780000.pth"
     condition_window = 100  # Same as used in training
     upsample_factor = 120
     sample_window = condition_window * upsample_factor
