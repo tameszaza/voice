@@ -245,7 +245,8 @@ def calculate_reverse_roc(all_probs, all_targets):
 def main():
     dataset_dir = "../data_eval"  # Root directory containing real/ and fake/ folders
     # checkpoint_path = "logdir2/mgan_step_930000.pth"
-    checkpoint_path = "logdir2/mgan_step_1780000.pth"
+    # checkpoint_path = "logdir2/mgan_step_1780000.pth"
+    checkpoint_path = "logdir/model.ckpt-205000.pt"
     condition_window = 100  # Same as used in training
     upsample_factor = 120
     sample_window = condition_window * upsample_factor
