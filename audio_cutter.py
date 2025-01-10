@@ -3,9 +3,9 @@ import math
 from pydub import AudioSegment
 
 # Input directory containing audio files
-input_dir = "test_fake_source"
+input_dir = "test_real_source"
 # Output directory for the trimmed segments
-output_dir = "test_fake"
+output_dir = "test_real"
 
 # Create output directory if it doesn't exist
 os.makedirs(output_dir, exist_ok=True)
@@ -34,10 +34,10 @@ def trim_audio_files():
                     # Extract segment
                     segment = audio[start_ms:end_ms]
 
-                    # Save segment as .flac
-                    segment_filename = f"{os.path.splitext(filename)[0]}_segment_{i//6 + 1}.flac"
+                    # Save segment as .wav
+                    segment_filename = f"{os.path.splitext(filename)[0]}_segment_{i//6 + 1}.wav"
                     segment_path = os.path.join(output_dir, segment_filename)
-                    segment.export(segment_path, format="flac")
+                    segment.export(segment_path, format="wav")
 
                 print(f"Processed: {filename}")
 
