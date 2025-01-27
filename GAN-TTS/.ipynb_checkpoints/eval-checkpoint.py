@@ -11,55 +11,12 @@ import matplotlib.pyplot as plt
 
 from sklearn.metrics import precision_recall_curve
 
-# def plot_metrics_vs_threshold(all_probs, all_targets):
-#     """
-#     Plot F1, Accuracy, Precision, and Recall vs. Threshold in a single figure.
-#     """
-#     thresholds = np.linspace(0, 1, 100)  # Define thresholds from 0 to 1
-#     precisions = []
-#     recalls = []
-#     f1_scores = []
-#     accuracies = []
-
-#     for threshold in thresholds:
-#         # Convert probabilities to binary predictions
-#         preds = (all_probs >= threshold).astype(int)
-
-#         TP = ((preds == 1) & (all_targets == 1)).sum()
-#         TN = ((preds == 0) & (all_targets == 0)).sum()
-#         FP = ((preds == 1) & (all_targets == 0)).sum()
-#         FN = ((preds == 0) & (all_targets == 1)).sum()
-
-#         # Precision
-#         precision = TP / (TP + FP) if TP + FP > 0 else 0
-#         precisions.append(precision)
-
-#         # Recall
-#         recall = TP / (TP + FN) if TP + FN > 0 else 0
-#         recalls.append(recall)
-
-#         # F1 Score
-#         f1 = (2 * precision * recall) / (precision + recall) if precision + recall > 0 else 0
-#         f1_scores.append(f1)
-
-#         # Accuracy
-#         accuracy = (TP + TN) / (TP + TN + FP + FN) if TP + TN + FP + FN > 0 else 0
-#         accuracies.append(accuracy)
-
-#     # Plot metrics vs. thresholds
-#     plt.figure(figsize=(10, 6))
-#     plt.plot(thresholds, precisions, label="Precision", color="blue")
-#     plt.plot(thresholds, recalls, label="Recall", color="orange")
-#     plt.plot(thresholds, f1_scores, label="F1 Score", color="green")
-#     plt.plot(thresholds, accuracies, label="Accuracy", color="red")
-#     plt.xlabel("Threshold")
-#     plt.ylabel("Metric Value")
-#     plt.title("Metrics vs. Threshold")
-#     plt.legend(loc="lower left")
-#     plt.grid()
-#     plt.tight_layout()
-#     plt.savefig("./roc_plots/metrics_vs_threshold.png")
-#     plt.show()
+plt.rcParams.update({
+    'font.size': 12,       # Default font size for all text
+    'axes.titlesize': 16,  # Title font size
+    'axes.labelsize': 14,  # Label font size
+    'legend.fontsize': 12, # Legend font size
+})
 
 def preprocess_test_data(dataset_dir, condition_window, sample_window, upsample_factor, max_clips_per_class=None):
     """
@@ -243,10 +200,10 @@ def calculate_reverse_roc(all_probs, all_targets):
 
 
 def main():
-    dataset_dir = "../data_eval"  # Root directory containing real/ and fake/ folders
+    dataset_dir = "../data_test_2"  # Root directory containing real/ and fake/ folders
     # checkpoint_path = "logdir2/mgan_step_930000.pth"
-    # checkpoint_path = "logdir2/mgan_step_1780000.pth"
-    checkpoint_path = "logdir/model.ckpt-205000.pt"
+    checkpoint_path = "logdir2/mgan_step_1780000.pth"
+    # checkpoint_path = "logdir/model.ckpt-205000.pt"
     condition_window = 100  # Same as used in training
     upsample_factor = 120
     sample_window = condition_window * upsample_factor
