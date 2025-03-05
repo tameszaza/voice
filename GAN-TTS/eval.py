@@ -200,9 +200,9 @@ def calculate_reverse_roc(all_probs, all_targets):
 
 
 def main():
-    dataset_dir = "../data_test_2"  # Root directory containing real/ and fake/ folders
+    dataset_dir = "../data_train/eval"  # Root directory containing real/ and fake/ folders
     # checkpoint_path = "logdir2/mgan_step_930000.pth"
-    checkpoint_path = "logdir2/mgan_step_1780000.pth"
+    checkpoint_path = "./logdir_noex/mgan_step_500000.pth"
     # checkpoint_path = "logdir/model.ckpt-205000.pt"
     condition_window = 100  # Same as used in training
     upsample_factor = 120
@@ -217,7 +217,7 @@ def main():
     discriminator.eval()
 
     # Preprocess test data
-    test_data, test_labels = preprocess_test_data(dataset_dir, condition_window, sample_window, upsample_factor, 3000)
+    test_data, test_labels = preprocess_test_data(dataset_dir, condition_window, sample_window, upsample_factor, 10000)
 
     # Evaluate the discriminator
     evaluate_discriminator(discriminator, test_data, test_labels, device)

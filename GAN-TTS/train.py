@@ -56,7 +56,7 @@ def attempt_to_restore(generator, discriminator, g_optimizer,
 
 def load_checkpoint(checkpoint_path, use_cuda):
     if use_cuda:
-        checkpoint = torch.load(checkpoint_path)
+        checkpoint = torch.load(checkpoint_path, weights_only=False)
     else:
         checkpoint = torch.load(checkpoint_path, map_location=lambda storage, loc: storage)
     return checkpoint

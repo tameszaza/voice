@@ -17,3 +17,4 @@ GAN-TTS/logdir*
 data_tts/
 GAN-TTS/data_ex
 data*
+__pycache__/

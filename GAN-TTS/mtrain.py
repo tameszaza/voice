@@ -39,7 +39,7 @@ def save_checkpoint(args, generators, discriminator, encoder, g_optimizers, d_op
 def load_checkpoint(checkpoint_path, device):
     if os.path.exists(checkpoint_path):
         print(f"Loading checkpoint from {checkpoint_path}")
-        return torch.load(checkpoint_path, map_location=device, weights_only=True)
+        return torch.load(checkpoint_path, map_location=device, weights_only=False)
 
     else:
         raise FileNotFoundError(f"Checkpoint not found at {checkpoint_path}")
@@ -101,7 +101,7 @@ def initialize_models(args, device):
 def train(args):
     device = torch.device("cuda" if args.use_cuda else "cpu")
     writer = SummaryWriter(log_dir=args.checkpoint_dir)
-    cudnn.benchmark = True  # Added this line to optimize GPU kernel selection
+    cudnn.benchmark = True  # Optimize GPU kernel selection
     scaler = torch.amp.GradScaler(device='cuda')
 
     # TorchMetrics
@@ -112,6 +112,7 @@ def train(args):
 
     os.makedirs(args.checkpoint_dir, exist_ok=True)
 
+    # Create datasets once
     train_dataset = CustomerDataset(
         args.input, upsample_factor=hop_length,
         local_condition=True, global_condition=False
@@ -139,27 +140,27 @@ def train(args):
     stft_criterion = MultiResolutionSTFTLoss().to(device)
     criterion = nn.MSELoss().to(device)
 
+    # Create the collate function and DataLoader objects once (moved outside the epoch loop)
+    collate = CustomerCollate(
+        upsample_factor=hop_length,
+        condition_window=args.condition_window,
+        local_condition=True,
+        global_condition=False
+    )
+    train_loader = DataLoader(
+        train_dataset, collate_fn=collate,
+        batch_size=args.batch_size, num_workers=args.num_workers,
+        shuffle=True, pin_memory=True, persistent_workers=True
+    )
+    external_loader = DataLoader(
+        external_dataset, collate_fn=collate,
+        batch_size=args.batch_size, num_workers=args.num_workers,
+        shuffle=True, pin_memory=True, persistent_workers=True
+    )
+    external_iter = iter(external_loader)
+
+    # Epoch loop
     for epoch in range(args.epochs):
-        collate = CustomerCollate(
-            upsample_factor=hop_length,
-            condition_window=args.condition_window,
-            local_condition=True,
-            global_condition=False
-        )
-
-        train_loader = DataLoader(
-            train_dataset, collate_fn=collate,
-            batch_size=args.batch_size, num_workers=args.num_workers,
-            shuffle=True, pin_memory=True, persistent_workers=True
-        )
-        external_loader = DataLoader(
-            external_dataset, collate_fn=collate,
-            batch_size=args.batch_size, num_workers=args.num_workers,
-            shuffle=True, pin_memory=True, persistent_workers=True
-        )
-
-        external_iter = iter(external_loader)
-
         for batch_idx, (samples, conditions) in enumerate(train_loader):
             samples = samples.to(device, non_blocking=True)
             conditions = conditions.to(device, non_blocking=True)
@@ -195,17 +196,13 @@ def train(args):
             d_optimizer.zero_grad()
             with torch.amp.autocast(device_type='cuda'):
                 d_loss = real_loss + args.lambda_fake * fake_loss + args.lambda_ex * external_loss
-            
             scaler.scale(d_loss).backward()  # Scales loss to avoid underflow
             scaler.step(d_optimizer)
             scaler.update()  # Updates the scaler for next iteration
-            
-                        
 
             #################################
             #   Compute Generator Loss (MGAN)
             #################################
-            # We'll do a single backward pass over the sum of generator losses
             total_g_loss = 0.0
 
             # Calculate orthogonal loss once if multiple generators
@@ -215,25 +212,20 @@ def train(args):
 
             # For each generator
             for g_out in generator_outputs:
-                # Discriminator sees *this* generator’s output
                 fake_out = discriminator(g_out)
                 adv_loss = criterion(fake_out, torch.ones_like(fake_out))
-
                 sc_loss, mag_loss = stft_criterion(g_out.squeeze(1), samples.squeeze(1))
-                # Weighted sum
                 g_loss = adv_loss * args.lambda_adv + sc_loss + args.lambda_mag * mag_loss
 
-                # If multiple generators, add orthogonal penalty
                 if len(generators) > 1 and args.lambda_orth > 0:
                     g_loss += args.lambda_orth * orth_loss_val
 
                 total_g_loss += g_loss
 
-            # Single backward pass for the sum
-            # (This updates the gradient buffer for all generators at once)
+            # Single backward pass for the sum (update all generators at once)
             for g_optim in g_optimizers:
                 g_optim.zero_grad()
-            
+
             with torch.amp.autocast(device_type='cuda'):
                 total_g_loss = 0.
                 for g_out in generator_outputs:
@@ -242,26 +234,22 @@ def train(args):
                     sc_loss, mag_loss = stft_criterion(g_out.squeeze(1), samples.squeeze(1))
                     g_loss = adv_loss * args.lambda_adv + sc_loss + args.lambda_mag * mag_loss
                     total_g_loss += g_loss
-            
+
             scaler.scale(total_g_loss).backward()  # Scales loss before backpropagation
             for g_optim in g_optimizers:
                 scaler.step(g_optim)
             scaler.update()  # Updates scaler
 
-
             ##############################
             #   Logging / TensorBoard
             ##############################
-            # Because we’re not storing the graph now, do item() for each
             d_loss_val = d_loss.item()
             real_loss_val = real_loss.item()
             fake_loss_val = fake_loss.item()
             external_loss_val = external_loss.item()
             total_g_loss_val = total_g_loss.item()
 
-            # Log metrics every 100 steps
             if global_step % 100 == 0:
-                # Evaluate metrics in no_grad block
                 with torch.no_grad():
                     real_preds = (real_output > 0.5).float().view(-1)
                     fake_preds = torch.cat([(f_out > 0.5).float().view(-1) for f_out in fake_outputs], dim=0)
@@ -279,44 +267,37 @@ def train(args):
                     total_f1 = f1_fn(all_preds, all_targets)
                     total_accuracy = accuracy_fn(all_preds, all_targets)
 
-                # Discriminator losses
                 writer.add_scalar('Loss/Discriminator_Total', d_loss_val, global_step)
                 writer.add_scalar('Loss/Discriminator_Real', real_loss_val, global_step)
                 writer.add_scalar('Loss/Discriminator_Fake', fake_loss_val, global_step)
                 writer.add_scalar('Loss/Discriminator_External', external_loss_val, global_step)
-                # Discriminator metrics
                 writer.add_scalar('Metrics/Discriminator_Precision', total_precision, global_step)
                 writer.add_scalar('Metrics/Discriminator_Recall', total_recall, global_step)
                 writer.add_scalar('Metrics/Discriminator_F1', total_f1, global_step)
                 writer.add_scalar('Metrics/Discriminator_Accuracy', total_accuracy, global_step)
-                # Generators
                 writer.add_scalar('Loss/Generators_Total', total_g_loss_val, global_step)
                 if len(generators) > 1:
                     writer.add_scalar('Loss/Orthogonal', orth_loss_val, global_step)
-                                # Log Generator losses individually
                 for idx, g_out in enumerate(generator_outputs):
                     sc_loss, mag_loss = stft_criterion(g_out.squeeze(1), samples.squeeze(1))
                     writer.add_scalar(f'Loss/Generator_{idx}_SpectralConvergence', sc_loss.item(), global_step)
                     writer.add_scalar(f'Loss/Generator_{idx}_Magnitude', mag_loss.item(), global_step)
 
-
-            # Print short summary
-            # if global_step % args.summary_step == 0:
             print(f"Step {global_step}: "
-                      f"D_Loss={d_loss_val:.4f}, "
-                      f"Orth={orth_loss_val:.4f}, "
-                      f"G_Loss={total_g_loss_val:.4f}")
+                  f"D_Loss={d_loss_val:.4f}, "
+                  f"Orth={orth_loss_val:.4f}, "
+                  f"G_Loss={total_g_loss_val:.4f}")
 
             global_step += 1
 
-            # Save checkpoint
             if global_step % args.checkpoint_step == 0:
                 save_checkpoint(args, generators, discriminator, encoder, g_optimizers, d_optimizer, global_step)
 
             # Cleanup references
             del samples, conditions, z
             del real_output, fake_outputs, external_samples, external_output
-            torch.cuda.empty_cache()  # optional debugging measure
+            torch.cuda.empty_cache()  # Optional debugging measure
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -324,9 +305,9 @@ def main():
     parser.add_argument('--checkpoint_dir', type=str, default="logdir2", help="Directory to save model")
     parser.add_argument('--single_checkpoint', type=str, default=None, help="Path to single-generator checkpoint")
     parser.add_argument('--mgan_checkpoint', type=str, default=None, help="Path to MGAN checkpoint")
-    parser.add_argument('--num_workers', type=int, default=2)
-    parser.add_argument('--epochs', type=int, default=1000)
-    parser.add_argument('--batch_size', type=int, default=15)
+    parser.add_argument('--num_workers', type=int, default=4)
+    parser.add_argument('--epochs', type=int, default=100000)
+    parser.add_argument('--batch_size', type=int, default=24)
     parser.add_argument('--g_learning_rate', type=float, default=0.0001)
     parser.add_argument('--d_learning_rate', type=float, default=0.0001)
     parser.add_argument('--z_dim', type=int, default=128)
