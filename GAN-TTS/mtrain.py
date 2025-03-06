@@ -315,7 +315,7 @@ def main():
     parser.add_argument('--use_cuda', type=bool, default=True)
     parser.add_argument('--num_generators', type=int, default=2)
     parser.add_argument('--lambda_adv', type=float, default=0.02)
-    parser.add_argument('--lambda_orth', type=float, default=0.1)
+    parser.add_argument('--lambda_orth', type=float, default=10)
     parser.add_argument('--lambda_fake', type=float, default=1.0)
     parser.add_argument('--lambda_mag', type=float, default=2.0)
     parser.add_argument('--lambda_ex', type=float, default=1.0)
