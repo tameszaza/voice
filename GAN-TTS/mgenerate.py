@@ -48,7 +48,7 @@ def create_models(args, num_generators):
 def synthesis(args):
     """Synthesize audio from multiple generators."""
     # Create multiple generators
-    num_generators = 2  # Adjust this number based on your MGAN setup
+    num_generators = 5  # Adjust this number based on your MGAN setup
     generators = create_models(args, num_generators)
     if args.resume is not None:
         attempt_to_restore(generators, args.resume, args.use_cuda)

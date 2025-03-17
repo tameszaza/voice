@@ -1,0 +1,12 @@
+====== Evaluation Results ======
+Best Threshold = 0.560
+Best F1        = 0.8241
+Precision      = 0.7511
+Recall         = 0.9128
+Accuracy       = 0.8349
+EER%%          = 16.8300
+ROC AUC        = 0.9062
+PR AUC         = 0.8098
+Confusion Matrix:
+[[6714  641]
+ [2225 7775]]

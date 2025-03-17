@@ -203,42 +203,34 @@ def train(args):
             #################################
             #   Compute Generator Loss (MGAN)
             #################################
-            total_g_loss = 0.0
-
+            
             # Calculate orthogonal loss once if multiple generators
             orth_loss_val = 0.0
+            total_g_loss = 0.0  # Initialize total generator loss
+            
             if len(generators) > 1 and args.lambda_orth > 0:
                 orth_loss_val = calculate_orthogonal_loss(encoder, generator_outputs)
+                # Scale orthogonal loss by number of generators since it's shared
+                orth_loss_val = orth_loss_val / len(generators)
 
-            # For each generator
-            for g_out in generator_outputs:
-                fake_out = discriminator(g_out)
-                adv_loss = criterion(fake_out, torch.ones_like(fake_out))
-                sc_loss, mag_loss = stft_criterion(g_out.squeeze(1), samples.squeeze(1))
-                g_loss = adv_loss * args.lambda_adv + sc_loss + args.lambda_mag * mag_loss
-
-                if len(generators) > 1 and args.lambda_orth > 0:
-                    g_loss += args.lambda_orth * orth_loss_val
-
-                total_g_loss += g_loss
-
-            # Single backward pass for the sum (update all generators at once)
-            for g_optim in g_optimizers:
+            # Update each generator separately
+            for idx, (generator, g_optim, g_out) in enumerate(zip(generators, g_optimizers, generator_outputs)):
                 g_optim.zero_grad()
-
-            with torch.amp.autocast(device_type='cuda'):
-                total_g_loss = 0.
-                for g_out in generator_outputs:
+                
+                with torch.amp.autocast(device_type='cuda'):
                     fake_out = discriminator(g_out)
                     adv_loss = criterion(fake_out, torch.ones_like(fake_out))
                     sc_loss, mag_loss = stft_criterion(g_out.squeeze(1), samples.squeeze(1))
                     g_loss = adv_loss * args.lambda_adv + sc_loss + args.lambda_mag * mag_loss
-                    total_g_loss += g_loss
-
-            scaler.scale(total_g_loss).backward()  # Scales loss before backpropagation
-            for g_optim in g_optimizers:
+                    
+                    if len(generators) > 1 and args.lambda_orth > 0:
+                        g_loss += args.lambda_orth * orth_loss_val
+                
+                total_g_loss += g_loss.item()  # Accumulate generator loss values
+                
+                scaler.scale(g_loss).backward()
                 scaler.step(g_optim)
-            scaler.update()  # Updates scaler
+                scaler.update()
 
             ##############################
             #   Logging / TensorBoard
@@ -247,7 +239,7 @@ def train(args):
             real_loss_val = real_loss.item()
             fake_loss_val = fake_loss.item()
             external_loss_val = external_loss.item()
-            total_g_loss_val = total_g_loss.item()
+            total_g_loss_val = total_g_loss  # Use accumulated generator loss
 
             if global_step % 100 == 0:
                 with torch.no_grad():

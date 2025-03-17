@@ -85,6 +85,56 @@ def compute_eer(fpr, tpr):
     eer = x0 + alpha * (x1 - x0)
     return eer
 
+def plot_metrics_vs_threshold(all_probs, all_targets, output_dir="./eval_plots"):
+    """
+    Sweeps thresholds from 0 to 1 (class 0 as the "positive" class) and plots
+    Precision, Recall, F1, and Accuracy vs. Threshold. 
+    The figure is saved to 'metrics_vs_threshold_class_0.png' in the output directory.
+    """
+    import os
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    os.makedirs(output_dir, exist_ok=True)
+    
+    thresholds = np.linspace(0, 1, 100)
+    precisions = []
+    recalls = []
+    f1_scores = []
+    accuracies = []
+
+    for threshold in thresholds:
+        preds = (all_probs >= threshold).astype(int)  # predicted=0 if prob<thresh
+        TP = ((preds == 0) & (all_targets == 0)).sum()
+        TN = ((preds == 1) & (all_targets == 1)).sum()
+        FP = ((preds == 0) & (all_targets == 1)).sum()
+        FN = ((preds == 1) & (all_targets == 0)).sum()
+
+        precision = TP / (TP + FP) if (TP + FP) > 0 else 0
+        recall = TP / (TP + FN) if (TP + FN) > 0 else 0
+        f1 = (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+        accuracy = (TP + TN) / (TP + TN + FP + FN)
+
+        precisions.append(precision)
+        recalls.append(recall)
+        f1_scores.append(f1)
+        accuracies.append(accuracy)
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(thresholds, precisions, label="Precision (Class 0)", color="blue")
+    plt.plot(thresholds, recalls, label="Recall (Class 0)", color="orange")
+    plt.plot(thresholds, f1_scores, label="F1 Score (Class 0)", color="green")
+    plt.plot(thresholds, accuracies, label="Accuracy", color="red")
+    plt.xlabel("Threshold")
+    plt.ylabel("Metric Value")
+    plt.title("Metrics vs. Threshold (Class 0)")
+    plt.legend(loc="lower left")
+    plt.grid()
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "metrics_vs_threshold_class_0.png"))
+    plt.close()
+    print("Saved threshold vs. metrics plot to:",
+          os.path.join(output_dir, "metrics_vs_threshold_class_0.png"))
 
 def evaluate_discriminator(discriminator, test_data, test_labels, device, output_dir="./eval_plots"):
     """
@@ -209,7 +259,7 @@ def evaluate_discriminator(discriminator, test_data, test_labels, device, output
     plt.grid()
     plt.savefig(os.path.join(output_dir, "pr_curve_class0.png"))
     plt.close()
-
+    plot_metrics_vs_threshold(all_probs, all_targets, output_dir=output_dir)
     # 7) Print & Save final metrics
     print("====== Evaluation Results ======")
     print(f"Best Threshold = {best_thresh:.3f}")
@@ -238,7 +288,7 @@ def evaluate_discriminator(discriminator, test_data, test_labels, device, output
 
 def main():
     dataset_dir = "../data_train/eval"  # Root directory containing real/ and fake/ subfolders
-    checkpoint_path = "./logdir_noex/mgan_step_10000.pth"
+    checkpoint_path = "./logdir_noex/mgan_step_500000.pth"
     condition_window = 100
     upsample_factor = 120
     sample_window = condition_window * upsample_factor
@@ -259,7 +309,7 @@ def main():
                                                   max_clips_per_class=10000)
 
     # 3) Evaluate
-    evaluate_discriminator(discriminator, test_data, test_labels, device, output_dir="./plots/mgan_step_10000")
+    evaluate_discriminator(discriminator, test_data, test_labels, device, output_dir="./plots/mgan_noex2_step_500000")
 
 
 if __name__ == "__main__":
