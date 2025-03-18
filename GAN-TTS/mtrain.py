@@ -172,12 +172,12 @@ def train(args):
             # Forward all generators
             generator_outputs = [gen(conditions, z) for gen in generators]
 
-            # Real data
+            # Real data (label 1)
             real_output = discriminator(samples)
-            # Fake data from internal generators
+            # Fake data from internal generators (label 0)
             fake_outputs = [discriminator(g_out.detach()) for g_out in generator_outputs]
 
-            # External data
+            # External data (label 0)
             try:
                 external_samples, _ = next(external_iter)
             except StopIteration:
@@ -186,10 +186,10 @@ def train(args):
             external_samples = external_samples.to(device, non_blocking=True)
             external_output = discriminator(external_samples)
 
-            # Discriminator loss
-            real_loss = criterion(real_output, torch.ones_like(real_output))
-            fake_loss = sum(criterion(f_out, torch.zeros_like(f_out)) for f_out in fake_outputs) / len(fake_outputs)
-            external_loss = criterion(external_output, torch.zeros_like(external_output))
+            # Discriminator loss calculation - use BCE or MSE consistently
+            real_loss = criterion(real_output, torch.ones_like(real_output))  # Target 1 for real
+            fake_loss = sum(criterion(f_out, torch.zeros_like(f_out)) for f_out in fake_outputs) / len(fake_outputs)  # Target 0 for fake
+            external_loss = criterion(external_output, torch.zeros_like(external_output))  # Target 0 for external
             d_loss = real_loss + args.lambda_fake * fake_loss + args.lambda_ex * external_loss
 
             # Update Discriminator
@@ -219,6 +219,7 @@ def train(args):
                 
                 with torch.amp.autocast(device_type='cuda'):
                     fake_out = discriminator(g_out)
+                    # Generator tries to fool discriminator into predicting 1
                     adv_loss = criterion(fake_out, torch.ones_like(fake_out))
                     sc_loss, mag_loss = stft_criterion(g_out.squeeze(1), samples.squeeze(1))
                     g_loss = adv_loss * args.lambda_adv + sc_loss + args.lambda_mag * mag_loss
@@ -243,13 +244,13 @@ def train(args):
 
             if global_step % 100 == 0:
                 with torch.no_grad():
-                    real_preds = (real_output > 0.5).float().view(-1)
-                    fake_preds = torch.cat([(f_out > 0.5).float().view(-1) for f_out in fake_outputs], dim=0)
-                    external_preds = (external_output > 0.5).float().view(-1)
+                    real_preds = (real_output > 0.5).float().view(-1)  # Should predict 1 for real
+                    fake_preds = torch.cat([(f_out > 0.5).float().view(-1) for f_out in fake_outputs], dim=0)  # Should predict 0 for fake
+                    external_preds = (external_output > 0.5).float().view(-1)  # Should predict 0 for external
 
-                    real_targets = torch.ones_like(real_preds)
-                    fake_targets = torch.zeros_like(fake_preds)
-                    external_targets = torch.zeros_like(external_preds)
+                    real_targets = torch.ones_like(real_preds)  # Real samples are 1
+                    fake_targets = torch.zeros_like(fake_preds)  # Fake samples are 0
+                    external_targets = torch.zeros_like(external_preds)  # External samples are 0
 
                     all_preds = torch.cat([real_preds, fake_preds, external_preds], dim=0)
                     all_targets = torch.cat([real_targets, fake_targets, external_targets], dim=0)

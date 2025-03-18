@@ -19,13 +19,20 @@ plt.rcParams.update({
 
 def preprocess_test_data(dataset_dir, condition_window, sample_window, upsample_factor, max_clips_per_class=None):
     """
-    Recursively processes audio files from all subdirectories under real/ and fake/ folders
+    Process audio files from the given directory
     """
     import os
     data = []
     labels = []
+    print(f"Looking for data in: {os.path.abspath(dataset_dir)}")
+
+    if not os.path.exists(dataset_dir):
+        raise ValueError(f"Directory does not exist: {dataset_dir}")
 
     def find_wav_files(directory):
+        if not os.path.exists(directory):
+            print(f"Warning: Directory does not exist: {directory}")
+            return []
         wav_files = []
         for root, _, files in os.walk(directory):
             for file in files:
@@ -33,32 +40,32 @@ def preprocess_test_data(dataset_dir, condition_window, sample_window, upsample_
                     wav_files.append(os.path.join(root, file))
         return wav_files
 
-    for label, folder in enumerate(["real", "fake"]):
-        folder_path = os.path.join(dataset_dir, folder)
-        audio_files = find_wav_files(folder_path)
+    # Find all .wav files in the directory
+    audio_files = find_wav_files(dataset_dir)
+    if max_clips_per_class is not None:
+        audio_files = audio_files[:max_clips_per_class]
 
-        if max_clips_per_class is not None:
-            audio_files = audio_files[:max_clips_per_class]
-
-        print(f"Processing {len(audio_files)} files from {folder} (including subdirectories)")
-
-        for audio_file in tqdm(audio_files, desc=f"Preprocessing {folder.capitalize()} Data"):
-            mel, audio = convert_audio(audio_file)
-
-            if len(audio) < sample_window:
-                audio = np.pad(audio, (0, sample_window - len(audio)), mode='constant')
-            else:
-                audio = audio[:sample_window]
-
-            if len(mel) < condition_window:
-                mel = np.pad(mel, ((0, condition_window - len(mel)), (0, 0)), mode='constant')
-            else:
-                mel = mel[:condition_window]
-
-            data.append((audio, mel))
-            labels.append(label)
+    print(f"Processing {len(audio_files)} files from directory")
     
-    labels = [1 - label for label in labels]
+    # Determine label based on directory name
+    label = 1 if os.path.basename(dataset_dir) == "fake" else 0
+    
+    for audio_file in tqdm(audio_files, desc=f"Preprocessing Data"):
+        mel, audio = convert_audio(audio_file)
+
+        if len(audio) < sample_window:
+            audio = np.pad(audio, (0, sample_window - len(audio)), mode='constant')
+        else:
+            audio = audio[:sample_window]
+
+        if len(mel) < condition_window:
+            mel = np.pad(mel, ((0, condition_window - len(mel)), (0, 0)), mode='constant')
+        else:
+            mel = mel[:condition_window]
+
+        data.append((audio, mel))
+        labels.append(label)
+    
     print(f"Total preprocessed samples: {len(data)}")
     return data, labels
 
@@ -112,11 +119,12 @@ def plot_metrics_vs_threshold(all_probs, all_targets, output_dir="./eval_plots")
     accuracies = []
 
     for threshold in thresholds:
-        preds = (all_probs >= threshold).astype(int)  # predicted=0 if prob<thresh
-        TP = ((preds == 0) & (all_targets == 0)).sum()
-        TN = ((preds == 1) & (all_targets == 1)).sum()
-        FP = ((preds == 0) & (all_targets == 1)).sum()
-        FN = ((preds == 1) & (all_targets == 0)).sum()
+        # Real is class 1 (high probability), Fake is class 0 (low probability)
+        preds = (all_probs >= threshold).astype(int)
+        TP = ((preds == 1) & (all_targets == 1)).sum()
+        TN = ((preds == 0) & (all_targets == 0)).sum()
+        FP = ((preds == 1) & (all_targets == 0)).sum()
+        FN = ((preds == 0) & (all_targets == 1)).sum()
 
         precision = TP / (TP + FP) if (TP + FP) > 0 else 0
         recall = TP / (TP + FN) if (TP + FN) > 0 else 0
@@ -129,14 +137,14 @@ def plot_metrics_vs_threshold(all_probs, all_targets, output_dir="./eval_plots")
         accuracies.append(accuracy)
 
     plt.figure(figsize=(10, 6))
-    plt.plot(thresholds, precisions, label="Precision (Class 0)", color="blue")
-    plt.plot(thresholds, recalls, label="Recall (Class 0)", color="orange")
-    plt.plot(thresholds, f1_scores, label="F1 Score (Class 0)", color="green")
+    plt.plot(thresholds, precisions, label="Precision (Real)", color="blue")
+    plt.plot(thresholds, recalls, label="Recall (Real)", color="orange")
+    plt.plot(thresholds, f1_scores, label="F1 Score (Real)", color="green")
     plt.plot(thresholds, accuracies, label="Accuracy", color="red")
     plt.xlabel("Threshold")
     plt.ylabel("Metric Value")
-    plt.title("Metrics vs. Threshold (Class 0)")
-    plt.legend(loc="lower left")
+    plt.title("Metrics vs. Threshold (Real = Class 1)")
+    plt.legend(loc="best")
     plt.grid()
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "metrics_vs_threshold_class_0.png"))
@@ -153,6 +161,11 @@ def evaluate_discriminator(discriminator, test_data, test_labels, device, output
       - plot/save ROC and PR curves
       - save text summary
     """
+    if len(test_data) == 0:
+        raise ValueError("No test data provided for evaluation")
+    
+    if len(test_labels) == 0:
+        raise ValueError("No test labels provided for evaluation")
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -168,6 +181,8 @@ def evaluate_discriminator(discriminator, test_data, test_labels, device, output
             output = discriminator(audio_tensor)
         
         prob = output.mean(dim=-1).item()
+        # Invert probability since discriminator outputs high for fake
+        prob = 1 - prob
         all_probs.append(prob)
         all_targets.append(label)
 
@@ -182,11 +197,12 @@ def evaluate_discriminator(discriminator, test_data, test_labels, device, output
     best_acc_thresh = 0.5
 
     for thresh in thresholds:
+        # Now low prob means fake (0) and high prob means real (1)
         preds = (all_probs >= thresh).astype(int)
-        TP = ((preds == 0) & (all_targets == 0)).sum()
-        TN = ((preds == 1) & (all_targets == 1)).sum()
-        FP = ((preds == 0) & (all_targets == 1)).sum()
-        FN = ((preds == 1) & (all_targets == 0)).sum()
+        TP = ((preds == 1) & (all_targets == 1)).sum()
+        TN = ((preds == 0) & (all_targets == 0)).sum()
+        FP = ((preds == 1) & (all_targets == 0)).sum()
+        FN = ((preds == 0) & (all_targets == 1)).sum()
 
         precision = TP / (TP + FP) if (TP + FP) > 0 else 0
         recall = TP / (TP + FN) if (TP + FN) > 0 else 0
@@ -196,6 +212,8 @@ def evaluate_discriminator(discriminator, test_data, test_labels, device, output
         if f1 > best_f1:
             best_f1 = f1
             best_thresh = thresh
+            precision_at_best = precision
+            recall_at_best = recall
             
         if accuracy > best_acc:
             best_acc = accuracy
@@ -225,7 +243,7 @@ def evaluate_discriminator(discriminator, test_data, test_labels, device, output
     plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
     plt.title(f"Confusion Matrix (best F1 threshold={best_thresh:.2f})")
     plt.colorbar()
-    class_names = ["Class0(Real)","Class1(Fake)"]
+    class_names = ["Fake(0)", "Real(1)"]
     tick_marks = np.arange(len(class_names))
     plt.xticks(tick_marks, class_names, rotation=45)
     plt.yticks(tick_marks, class_names)
@@ -253,7 +271,7 @@ def evaluate_discriminator(discriminator, test_data, test_labels, device, output
     plt.imshow(cm_acc, interpolation='nearest', cmap=plt.cm.Blues)
     plt.title(f"Confusion Matrix (best Accuracy threshold={best_acc_thresh:.2f})")
     plt.colorbar()
-    class_names = ["Class0(Real)","Class1(Fake)"]
+    class_names = ["Fake(0)", "Real(1)"]
     tick_marks = np.arange(len(class_names))
     plt.xticks(tick_marks, class_names, rotation=45)
     plt.yticks(tick_marks, class_names)
@@ -273,8 +291,8 @@ def evaluate_discriminator(discriminator, test_data, test_labels, device, output
     plt.close()
 
     # 4) Compute EER
-    # Because we interpret class 0 as "positive", we pass in (1 - prob) to roc_curve
-    fpr, tpr, roc_thresh = roc_curve(all_targets, 1 - all_probs, pos_label=0)
+    # Now we use probabilities directly since high prob = real (class 1)
+    fpr, tpr, roc_thresh = roc_curve(all_targets, all_probs)
     eer = compute_eer(fpr, tpr)
     eer_percent = 100.0 * eer
 
@@ -292,7 +310,7 @@ def evaluate_discriminator(discriminator, test_data, test_labels, device, output
     plt.close()
 
     # 6) Plot Precision-Recall curve
-    prec, rec, pr_thresh = precision_recall_curve(all_targets, 1 - all_probs, pos_label=0)
+    prec, rec, pr_thresh = precision_recall_curve(all_targets, all_probs)
     # AP = area under the precision-recall curve
     ap = auc(rec, prec)
     plt.figure(figsize=(6,6))
@@ -351,32 +369,130 @@ def evaluate_discriminator(discriminator, test_data, test_labels, device, output
         f.write("\nConfusion Matrix at Best Accuracy:\n")
         f.write(str(cm_acc) + "\n")
 
+def generate_fake_samples(generators, test_data, device):
+    """Generate fake samples using the generators"""
+    fake_samples = []
+    for audio, mel in tqdm(test_data, desc="Generating fake samples"):
+        mel_tensor = torch.FloatTensor(mel).unsqueeze(0).permute(0, 2, 1).to(device)
+        z = torch.randn(1, 128, device=device)  # Assuming z_dim=128
+        
+        # For each generator, generate a fake sample
+        for generator in generators:
+            with torch.no_grad():
+                fake_audio = generator(mel_tensor, z)
+            fake_samples.append((fake_audio.squeeze().cpu().numpy(), mel))
+    
+    return fake_samples
+
+def evaluate_all_scenarios(discriminator, generators, real_eval_data, fake_eval_data, device, output_dir="./eval_plots"):
+    """Evaluate both scenarios: eval fakes vs eval reals, and generated fakes vs eval reals"""
+    
+    # Validate input data
+    if len(real_eval_data) == 0:
+        raise ValueError("No real evaluation data found. Please check the real data directory path.")
+    
+    if len(fake_eval_data) == 0:
+        print("Warning: No fake evaluation data found. Proceeding with only generated fakes evaluation.")
+        
+    # First scenario: Only evaluate if we have fake evaluation data
+    if len(fake_eval_data) > 0:
+        print("\n=== Evaluating Fake (Eval) vs Real (Eval) ===")
+        print(f"Number of real samples: {len(real_eval_data)}")
+        print(f"Number of fake samples: {len(fake_eval_data)}")
+        
+        eval_output_dir = os.path.join(output_dir, "eval_fake_vs_real")
+        os.makedirs(eval_output_dir, exist_ok=True)
+        
+        eval_data = real_eval_data + fake_eval_data
+        # Real is 1, Fake is 0
+        eval_labels = [1] * len(real_eval_data) + [0] * len(fake_eval_data)
+        evaluate_discriminator(discriminator, eval_data, eval_labels, device, output_dir=eval_output_dir)
+    
+    # Second scenario: Generated fakes vs evaluation reals
+    print("\n=== Evaluating Fake (Generated) vs Real (Eval) ===")
+    gen_output_dir = os.path.join(output_dir, "generated_fake_vs_real")
+    os.makedirs(gen_output_dir, exist_ok=True)
+    
+    # Generate fake samples using our generators
+    generated_fakes = generate_fake_samples(generators, real_eval_data, device)
+    print(f"Number of real samples: {len(real_eval_data)}")
+    print(f"Number of generated fake samples: {len(generated_fakes)}")
+    
+    gen_data = real_eval_data + generated_fakes
+    # Real is 1, Fake is 0
+    gen_labels = [1] * len(real_eval_data) + [0] * len(generated_fakes)
+    evaluate_discriminator(discriminator, gen_data, gen_labels, device, output_dir=gen_output_dir)
 
 def main():
-    dataset_dir = "../data_train/eval/"  # Root directory containing real/ and fake/ subfolders
-    checkpoint_path = "./logdir_noex_5/mgan_step_240000.pth"
+    # Get the absolute path of the script directory
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # Construct absolute paths
+    dataset_dir = os.path.abspath(os.path.join(script_dir, "../data_train/eval"))
+    checkpoint_path = os.path.join(script_dir, "logdir_noex3/mgan_step_10000.pth")
     condition_window = 100
     upsample_factor = 120
     sample_window = condition_window * upsample_factor
 
+    # Validate paths
+    if not os.path.exists(checkpoint_path):
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+    
+    if not os.path.exists(dataset_dir):
+        raise FileNotFoundError(f"Dataset directory not found: {dataset_dir}")
+    
+    print(f"Using dataset directory: {dataset_dir}")
+    print(f"Using checkpoint: {checkpoint_path}")
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # 1) Load the discriminator
-    discriminator = Discriminator().to(device)
+    # 1) Load all models
     checkpoint = torch.load(checkpoint_path, map_location=device)
+    
+    # Load discriminator
+    discriminator = Discriminator().to(device)
     discriminator.load_state_dict(checkpoint["discriminator"])
     discriminator.eval()
+    
+    # Load generators
+    from models.generator import Generator
+    generators = []
+    num_generators = sum(1 for k in checkpoint.keys() if k.startswith("generator_"))
+    
+    for i in range(num_generators):
+        generator = Generator(80, 128).to(device)  # Assuming mel_dim=80, z_dim=128
+        generator.load_state_dict(checkpoint[f"generator_{i}"])
+        generator.eval()
+        generators.append(generator)
+    
+    print(f"Loaded {len(generators)} generators")
 
-    # 2) Preprocess test data
-    test_data, test_labels = preprocess_test_data(dataset_dir,
-                                                  condition_window,
-                                                  sample_window,
-                                                  upsample_factor,
-                                                  max_clips_per_class=10000)
+    # 2) Preprocess evaluation data separately for real and fake
+    real_dir = os.path.join(dataset_dir, "real")
+    fake_dir = os.path.join(dataset_dir, "fake")
+    
+    print(f"\nProcessing real directory: {real_dir}")
+    real_data, _ = preprocess_test_data(real_dir, condition_window, sample_window, 
+                                      upsample_factor, max_clips_per_class=1000)
+    
+    print(f"\nProcessing fake directory: {fake_dir}")
+    fake_data, _ = preprocess_test_data(fake_dir, condition_window, sample_window, 
+                                      upsample_factor, max_clips_per_class=1000)
 
-    # 3) Evaluate
-    evaluate_discriminator(discriminator, test_data, test_labels, device, output_dir="./plots/mgan_noex_5_step_240000")
-
+    # 3) Evaluate both scenarios
+    evaluate_all_scenarios(
+        discriminator=discriminator,
+        generators=generators,
+        real_eval_data=real_data,
+        fake_eval_data=fake_data,
+        device=device,
+        output_dir="./plots/mgan_noex2_step_10000"
+    )
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"\nError occurred: {str(e)}")
+        import traceback
+        traceback.print_exc()
