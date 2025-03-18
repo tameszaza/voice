@@ -19,20 +19,28 @@ plt.rcParams.update({
 
 def preprocess_test_data(dataset_dir, condition_window, sample_window, upsample_factor, max_clips_per_class=None):
     """
-    Same as your original function, unchanged.
+    Recursively processes audio files from all subdirectories under real/ and fake/ folders
     """
     import os
     data = []
     labels = []
 
+    def find_wav_files(directory):
+        wav_files = []
+        for root, _, files in os.walk(directory):
+            for file in files:
+                if file.endswith('.wav'):
+                    wav_files.append(os.path.join(root, file))
+        return wav_files
+
     for label, folder in enumerate(["real", "fake"]):
         folder_path = os.path.join(dataset_dir, folder)
-        audio_files = [os.path.join(folder_path, f) for f in os.listdir(folder_path) if f.endswith('.wav')]
+        audio_files = find_wav_files(folder_path)
 
         if max_clips_per_class is not None:
             audio_files = audio_files[:max_clips_per_class]
 
-        print(f"Processing {len(audio_files)} files from {folder}")
+        print(f"Processing {len(audio_files)} files from {folder} (including subdirectories)")
 
         for audio_file in tqdm(audio_files, desc=f"Preprocessing {folder.capitalize()} Data"):
             mel, audio = convert_audio(audio_file)
@@ -49,8 +57,8 @@ def preprocess_test_data(dataset_dir, condition_window, sample_window, upsample_
 
             data.append((audio, mel))
             labels.append(label)
+    
     labels = [1 - label for label in labels]
-
     print(f"Total preprocessed samples: {len(data)}")
     return data, labels
 
@@ -166,13 +174,14 @@ def evaluate_discriminator(discriminator, test_data, test_labels, device, output
     all_probs = np.array(all_probs)
     all_targets = np.array(all_targets)
 
-    # 2) Sweep thresholds for best F1
+    # 2) Sweep thresholds for best F1 and best accuracy
     thresholds = np.linspace(0, 1, 101)
     best_f1 = -1
     best_thresh = 0.5
+    best_acc = -1
+    best_acc_thresh = 0.5
 
     for thresh in thresholds:
-        # "Class 0" as 'positive' => predicted=0 if prob < thresh
         preds = (all_probs >= thresh).astype(int)
         TP = ((preds == 0) & (all_targets == 0)).sum()
         TN = ((preds == 1) & (all_targets == 1)).sum()
@@ -182,10 +191,18 @@ def evaluate_discriminator(discriminator, test_data, test_labels, device, output
         precision = TP / (TP + FP) if (TP + FP) > 0 else 0
         recall = TP / (TP + FN) if (TP + FN) > 0 else 0
         f1 = (2 * precision * recall) / (precision + recall) if (precision+recall)>0 else 0
+        accuracy = (TP + TN) / (TP + TN + FP + FN)
 
         if f1 > best_f1:
             best_f1 = f1
             best_thresh = thresh
+            
+        if accuracy > best_acc:
+            best_acc = accuracy
+            best_acc_thresh = thresh
+            precision_at_best_acc = precision
+            recall_at_best_acc = recall
+            f1_at_best_acc = f1
 
     # 3) Confusion matrix + metrics at best threshold
     preds_best = (all_probs >= best_thresh).astype(int)
@@ -227,6 +244,34 @@ def evaluate_discriminator(discriminator, test_data, test_labels, device, output
     plt.savefig(os.path.join(output_dir, "confusion_matrix_bestF1.png"))
     plt.close()
 
+    # Add confusion matrix at best accuracy
+    preds_best_acc = (all_probs >= best_acc_thresh).astype(int)
+    cm_acc = confusion_matrix(all_targets, preds_best_acc)
+    
+    # Plot confusion matrix for best accuracy
+    plt.figure(figsize=(5.5,4.5))
+    plt.imshow(cm_acc, interpolation='nearest', cmap=plt.cm.Blues)
+    plt.title(f"Confusion Matrix (best Accuracy threshold={best_acc_thresh:.2f})")
+    plt.colorbar()
+    class_names = ["Class0(Real)","Class1(Fake)"]
+    tick_marks = np.arange(len(class_names))
+    plt.xticks(tick_marks, class_names, rotation=45)
+    plt.yticks(tick_marks, class_names)
+
+    fmt = 'd'
+    thresh_val = cm_acc.max() / 2.
+    for i in range(cm_acc.shape[0]):
+        for j in range(cm_acc.shape[1]):
+            plt.text(j, i, format(cm_acc[i, j], fmt),
+                     ha="center", va="center",
+                     color="white" if cm_acc[i, j] > thresh_val else "black")
+
+    plt.tight_layout()
+    plt.ylabel('True label')
+    plt.xlabel('Predicted label')
+    plt.savefig(os.path.join(output_dir, "confusion_matrix_bestAcc.png"))
+    plt.close()
+
     # 4) Compute EER
     # Because we interpret class 0 as "positive", we pass in (1 - prob) to roc_curve
     fpr, tpr, roc_thresh = roc_curve(all_targets, 1 - all_probs, pos_label=0)
@@ -262,33 +307,54 @@ def evaluate_discriminator(discriminator, test_data, test_labels, device, output
     plot_metrics_vs_threshold(all_probs, all_targets, output_dir=output_dir)
     # 7) Print & Save final metrics
     print("====== Evaluation Results ======")
-    print(f"Best Threshold = {best_thresh:.3f}")
-    print(f"Best F1        = {best_f1:.4f}")
-    print(f"Precision      = {precision_at_best:.4f}")
-    print(f"Recall         = {recall_at_best:.4f}")
-    print(f"Accuracy       = {accuracy_at_best:.4f}")
-    print(f"EER%%          = {eer_percent:.4f}")
-    print(f"ROC AUC        = {roc_auc:.4f}")
-    print(f"PR AUC         = {ap:.4f}")
-    print("Confusion Matrix:\n", cm)
+    print("\nMetrics at Best F1:")
+    print(f"Best F1 Threshold = {best_thresh:.3f}")
+    print(f"F1               = {best_f1:.4f}")
+    print(f"Precision        = {precision_at_best:.4f}")
+    print(f"Recall           = {recall_at_best:.4f}")
+    print(f"Accuracy         = {accuracy_at_best:.4f}")
+    
+    print("\nMetrics at Best Accuracy:")
+    print(f"Best Acc Threshold = {best_acc_thresh:.3f}")
+    print(f"Accuracy           = {best_acc:.4f}")
+    print(f"F1                 = {f1_at_best_acc:.4f}")
+    print(f"Precision          = {precision_at_best_acc:.4f}")
+    print(f"Recall             = {recall_at_best_acc:.4f}")
+    
+    print(f"\nEER%%              = {eer_percent:.4f}")
+    print(f"ROC AUC            = {roc_auc:.4f}")
+    print(f"PR AUC             = {ap:.4f}")
+    print("\nConfusion Matrix at Best F1:\n", cm)
+    print("\nConfusion Matrix at Best Accuracy:\n", cm_acc)
 
     with open(os.path.join(output_dir, "evaluation_metrics.txt"), "w") as f:
         f.write("====== Evaluation Results ======\n")
-        f.write(f"Best Threshold = {best_thresh:.3f}\n")
-        f.write(f"Best F1        = {best_f1:.4f}\n")
-        f.write(f"Precision      = {precision_at_best:.4f}\n")
-        f.write(f"Recall         = {recall_at_best:.4f}\n")
-        f.write(f"Accuracy       = {accuracy_at_best:.4f}\n")
-        f.write(f"EER%%          = {eer_percent:.4f}\n")
-        f.write(f"ROC AUC        = {roc_auc:.4f}\n")
-        f.write(f"PR AUC         = {ap:.4f}\n")
-        f.write("Confusion Matrix:\n")
+        f.write("\nMetrics at Best F1:\n")
+        f.write(f"Best F1 Threshold = {best_thresh:.3f}\n")
+        f.write(f"F1               = {best_f1:.4f}\n")
+        f.write(f"Precision        = {precision_at_best:.4f}\n")
+        f.write(f"Recall           = {recall_at_best:.4f}\n")
+        f.write(f"Accuracy         = {accuracy_at_best:.4f}\n")
+        
+        f.write("\nMetrics at Best Accuracy:\n")
+        f.write(f"Best Acc Threshold = {best_acc_thresh:.3f}\n")
+        f.write(f"Accuracy           = {best_acc:.4f}\n")
+        f.write(f"F1                 = {f1_at_best_acc:.4f}\n")
+        f.write(f"Precision          = {precision_at_best_acc:.4f}\n")
+        f.write(f"Recall             = {recall_at_best_acc:.4f}\n")
+        
+        f.write(f"\nEER%%              = {eer_percent:.4f}\n")
+        f.write(f"ROC AUC            = {roc_auc:.4f}\n")
+        f.write(f"PR AUC             = {ap:.4f}\n")
+        f.write("\nConfusion Matrix at Best F1:\n")
         f.write(str(cm) + "\n")
+        f.write("\nConfusion Matrix at Best Accuracy:\n")
+        f.write(str(cm_acc) + "\n")
 
 
 def main():
-    dataset_dir = "../data_train/eval"  # Root directory containing real/ and fake/ subfolders
-    checkpoint_path = "./logdir_noex/mgan_step_500000.pth"
+    dataset_dir = "../data_train/eval/"  # Root directory containing real/ and fake/ subfolders
+    checkpoint_path = "./logdir_noex_5/mgan_step_240000.pth"
     condition_window = 100
     upsample_factor = 120
     sample_window = condition_window * upsample_factor
@@ -309,7 +375,7 @@ def main():
                                                   max_clips_per_class=10000)
 
     # 3) Evaluate
-    evaluate_discriminator(discriminator, test_data, test_labels, device, output_dir="./plots/mgan_noex2_step_500000")
+    evaluate_discriminator(discriminator, test_data, test_labels, device, output_dir="./plots/mgan_noex_5_step_240000")
 
 
 if __name__ == "__main__":
