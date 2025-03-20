@@ -1,0 +1,27 @@
+====== Evaluation Results ======
+
+Metrics at Best F1:
+Best F1 Threshold = 0.560
+F1               = 0.7118
+Precision        = 0.5734
+Recall           = 0.9384
+Accuracy         = 0.7425
+
+Metrics at Best Accuracy:
+Best Acc Threshold = 0.570
+Accuracy           = 0.7549
+F1                 = 0.6893
+Precision          = 0.6043
+Recall             = 0.8021
+
+EER%%              = 26.0200
+ROC AUC            = 0.7813
+PR AUC             = 0.5219
+
+Confusion Matrix at Best F1:
+[[6420 3580]
+ [ 316 4812]]
+
+Confusion Matrix at Best Accuracy:
+[[7307 2693]
+ [1015 4113]]

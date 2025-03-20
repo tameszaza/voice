@@ -2,7 +2,7 @@ import torch
 import os
 import numpy as np
 from utils.audio import convert_audio
-from models.v2_discriminator import Discriminator
+from models.v3_discriminator import Discriminator
 from torchmetrics.classification import BinaryAccuracy, BinaryPrecision, BinaryRecall, BinaryF1Score
 from tqdm import tqdm
 from tabulate import tabulate
@@ -42,8 +42,10 @@ def preprocess_test_data(dataset_dir, condition_window, sample_window, upsample_
 
     # Find all .wav files in the directory
     audio_files = find_wav_files(dataset_dir)
-    if max_clips_per_class is not None:
-        audio_files = audio_files[:max_clips_per_class]
+    if max_clips_per_class is not None and len(audio_files) > max_clips_per_class:
+        import random
+        audio_files = random.sample(audio_files, max_clips_per_class)
+
 
     print(f"Processing {len(audio_files)} files from directory")
     
@@ -101,15 +103,6 @@ def compute_eer(fpr, tpr):
     return eer
 
 def plot_metrics_vs_threshold(all_probs, all_targets, output_dir="./eval_plots"):
-    """
-    Sweeps thresholds from 0 to 1 (class 0 as the "positive" class) and plots
-    Precision, Recall, F1, and Accuracy vs. Threshold. 
-    The figure is saved to 'metrics_vs_threshold_class_0.png' in the output directory.
-    """
-    import os
-    import numpy as np
-    import matplotlib.pyplot as plt
-
     os.makedirs(output_dir, exist_ok=True)
     
     thresholds = np.linspace(0, 1, 100)
@@ -119,7 +112,7 @@ def plot_metrics_vs_threshold(all_probs, all_targets, output_dir="./eval_plots")
     accuracies = []
 
     for threshold in thresholds:
-        # Real is class 1 (high probability), Fake is class 0 (low probability)
+        # Now high prob means fake (class 1)
         preds = (all_probs >= threshold).astype(int)
         TP = ((preds == 1) & (all_targets == 1)).sum()
         TN = ((preds == 0) & (all_targets == 0)).sum()
@@ -137,20 +130,20 @@ def plot_metrics_vs_threshold(all_probs, all_targets, output_dir="./eval_plots")
         accuracies.append(accuracy)
 
     plt.figure(figsize=(10, 6))
-    plt.plot(thresholds, precisions, label="Precision (Real)", color="blue")
-    plt.plot(thresholds, recalls, label="Recall (Real)", color="orange")
-    plt.plot(thresholds, f1_scores, label="F1 Score (Real)", color="green")
+    plt.plot(thresholds, precisions, label="Precision (Fake)", color="blue")  # Updated label
+    plt.plot(thresholds, recalls, label="Recall (Fake)", color="orange")      # Updated label
+    plt.plot(thresholds, f1_scores, label="F1 Score (Fake)", color="green")   # Updated label
     plt.plot(thresholds, accuracies, label="Accuracy", color="red")
     plt.xlabel("Threshold")
     plt.ylabel("Metric Value")
-    plt.title("Metrics vs. Threshold (Real = Class 1)")
+    plt.title("Metrics vs. Threshold (Fake = Class 1)")  # Updated title
     plt.legend(loc="best")
     plt.grid()
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "metrics_vs_threshold_class_0.png"))
+    plt.savefig(os.path.join(output_dir, "metrics_vs_threshold_fake.png"))
     plt.close()
     print("Saved threshold vs. metrics plot to:",
-          os.path.join(output_dir, "metrics_vs_threshold_class_0.png"))
+          os.path.join(output_dir, "metrics_vs_threshold_fake.png"))
 
 def evaluate_discriminator(discriminator, test_data, test_labels, device, output_dir="./eval_plots"):
     """
@@ -181,8 +174,6 @@ def evaluate_discriminator(discriminator, test_data, test_labels, device, output
             output = discriminator(audio_tensor)
         
         prob = output.mean(dim=-1).item()
-        # Invert probability since discriminator outputs high for fake
-        prob = 1 - prob
         all_probs.append(prob)
         all_targets.append(label)
 
@@ -223,12 +214,14 @@ def evaluate_discriminator(discriminator, test_data, test_labels, device, output
             f1_at_best_acc = f1
 
     # 3) Confusion matrix + metrics at best threshold
+        # --- FIX: Correct confusion matrix element assignments ---
     preds_best = (all_probs >= best_thresh).astype(int)
     cm = confusion_matrix(all_targets, preds_best)
-    TP = cm[0,0]
-    FN = cm[0,1]
-    FP = cm[1,0]
-    TN = cm[1,1]
+    # Previously, TP, FN, FP, TN were incorrectly assigned.
+    TN = cm[0, 0]
+    FP = cm[0, 1]
+    FN = cm[1, 0]
+    TP = cm[1, 1]
 
     precision_at_best = TP / (TP + FP) if (TP + FP) > 0 else 0
     recall_at_best = TP / (TP + FN) if (TP + FN) > 0 else 0
@@ -241,9 +234,9 @@ def evaluate_discriminator(discriminator, test_data, test_labels, device, output
 
     plt.figure(figsize=(5.5,4.5))
     plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
-    plt.title(f"Confusion Matrix (best F1 threshold={best_thresh:.2f})")
+    plt.title(f"Confusion Matrix (Best F1 threshold={best_thresh:.2f})")
     plt.colorbar()
-    class_names = ["Fake(0)", "Real(1)"]
+    class_names = ["Real (0)", "Fake (1)"]  # Updated: Fake is positive (class 1)
     tick_marks = np.arange(len(class_names))
     plt.xticks(tick_marks, class_names, rotation=45)
     plt.yticks(tick_marks, class_names)
@@ -303,10 +296,10 @@ def evaluate_discriminator(discriminator, test_data, test_labels, device, output
     plt.plot([0, 1], [0, 1], linestyle="--", color="gray", label="Random Guess")
     plt.xlabel("False Positive Rate")
     plt.ylabel("True Positive Rate")
-    plt.title("ROC Curve (Class 0 = Real)")
+    plt.title("ROC Curve (Fake = Positive)")  # Updated title
     plt.legend(loc="lower right")
     plt.grid()
-    plt.savefig(os.path.join(output_dir, "roc_curve_class0.png"))
+    plt.savefig(os.path.join(output_dir, "roc_curve_fake.png"))
     plt.close()
 
     # 6) Plot Precision-Recall curve
@@ -315,12 +308,12 @@ def evaluate_discriminator(discriminator, test_data, test_labels, device, output
     ap = auc(rec, prec)
     plt.figure(figsize=(6,6))
     plt.plot(rec, prec, color='green', label=f"PR (AP={ap:.4f})")
-    plt.xlabel("Recall (Class 0)")
-    plt.ylabel("Precision (Class 0)")
-    plt.title("Precision-Recall Curve (Class 0 = Real)")
+    plt.xlabel("Recall (Fake)")
+    plt.ylabel("Precision (Fake)")
+    plt.title("Precision-Recall Curve (Fake = Positive)")  # Updated title
     plt.legend(loc="lower left")
     plt.grid()
-    plt.savefig(os.path.join(output_dir, "pr_curve_class0.png"))
+    plt.savefig(os.path.join(output_dir, "pr_curve_fake.png"))
     plt.close()
     plot_metrics_vs_threshold(all_probs, all_targets, output_dir=output_dir)
     # 7) Print & Save final metrics
@@ -428,8 +421,8 @@ def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     
     # Construct absolute paths
-    dataset_dir = os.path.abspath(os.path.join(script_dir, "../data_train/eval"))
-    checkpoint_path = os.path.join(script_dir, "logdir_noex3/mgan_step_10000.pth")
+    dataset_dir = os.path.abspath(os.path.join(script_dir, "../data_train/train"))
+    checkpoint_path = os.path.join(script_dir, "logdir_dv3/disc_only_step_17000.pth")
     condition_window = 100
     upsample_factor = 120
     sample_window = condition_window * upsample_factor
@@ -473,11 +466,11 @@ def main():
     
     print(f"\nProcessing real directory: {real_dir}")
     real_data, _ = preprocess_test_data(real_dir, condition_window, sample_window, 
-                                      upsample_factor, max_clips_per_class=1000)
+                                      upsample_factor, max_clips_per_class=10000)
     
     print(f"\nProcessing fake directory: {fake_dir}")
     fake_data, _ = preprocess_test_data(fake_dir, condition_window, sample_window, 
-                                      upsample_factor, max_clips_per_class=1000)
+                                      upsample_factor, max_clips_per_class=10000)
 
     # 3) Evaluate both scenarios
     evaluate_all_scenarios(
@@ -486,7 +479,7 @@ def main():
         real_eval_data=real_data,
         fake_eval_data=fake_data,
         device=device,
-        output_dir="./plots/mgan_noex2_step_10000"
+        output_dir="./plots/disc_onlyv3_train_step_17000"
     )
 
 if __name__ == "__main__":
