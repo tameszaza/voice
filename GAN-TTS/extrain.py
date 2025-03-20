@@ -11,7 +11,7 @@ from torch.cuda.amp import autocast, GradScaler
 from tensorboardX import SummaryWriter
 
 # ------------------------------------------------------------------
-# Import your existing modules
+# Import your existing modules (same as in your code above).
 # ------------------------------------------------------------------
 from utils.dataset import CustomerDataset, CustomerCollate
 from models.v2_discriminator import Discriminator
@@ -20,27 +20,18 @@ from utils.loss import MultiResolutionSTFTLoss
 from torchmetrics.classification import BinaryAccuracy, BinaryPrecision, BinaryRecall, BinaryF1Score
 
 # ------------------------------------------------------------------
-# Checkpoint functions for the Discriminator
+# Minimal version of checkpointing just for Discriminator
 # ------------------------------------------------------------------
-def save_discriminator_checkpoint(args, discriminator, d_optimizer, step, suffix=""):
-    """
-    Save a checkpoint. If suffix == "_best", then save the best model
-    in a fixed filename (replacing the old best).
-    """
+def save_discriminator_checkpoint(args, discriminator, d_optimizer, step):
     checkpoint = {
         "discriminator": discriminator.state_dict(),
         "d_optimizer": d_optimizer.state_dict(),
         "global_step": step
     }
-    if suffix == "_best":
-        filename = "disc_only_best.pth"
-    else:
-        filename = f"disc_only_step_{step}{suffix}.pth"
-    checkpoint_path = os.path.join(args.checkpoint_dir, filename)
+    checkpoint_path = os.path.join(args.checkpoint_dir, f"disc_only_step_{step}.pth")
     os.makedirs(args.checkpoint_dir, exist_ok=True)
     torch.save(checkpoint, checkpoint_path)
-    print(f"Discriminator-only checkpoint saved at step {step}{', best model' if suffix=='_best' else ''}: {checkpoint_path}")
-    return checkpoint_path
+    print(f"Discriminator-only checkpoint saved at step {step}: {checkpoint_path}")
 
 def load_discriminator_checkpoint(path, discriminator, d_optimizer, device):
     if os.path.exists(path):
@@ -100,15 +91,12 @@ def train_discriminator_only(args):
     d_optimizer = optim.Adam(discriminator.parameters(), lr=args.d_learning_rate)
     scaler = GradScaler()
 
-    # Learning Rate Scheduler: Reduce LR on plateau (monitors avg epoch loss)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        d_optimizer, mode='min', factor=0.5, patience=args.patience, verbose=True, min_lr=args.min_lr
-    )
-
-    # Load from optional checkpoint if provided
+    # Load from optional checkpoint
     global_step = 0
     if args.disc_checkpoint and os.path.exists(args.disc_checkpoint):
-        global_step = load_discriminator_checkpoint(args.disc_checkpoint, discriminator, d_optimizer, device)
+        global_step = load_discriminator_checkpoint(
+            args.disc_checkpoint, discriminator, d_optimizer, device
+        )
     else:
         print("No discriminator checkpoint found; training from scratch.")
 
@@ -118,16 +106,11 @@ def train_discriminator_only(args):
     recall_fn = BinaryRecall().to(device)
     f1_fn = BinaryF1Score().to(device)
 
-    # For best model restoration (replace old best)
-    global_best_loss = float('inf')
-    best_state = None
-    patience_counter = 0
-
+    # ----------------------------------------------------------
+    # Wrap training loop in try-except to catch KeyboardInterrupt
+    # ----------------------------------------------------------
     try:
         for epoch in range(args.epochs):
-            epoch_loss = 0.0
-            batch_count = 0
-
             for batch_idx, (samples, conditions) in enumerate(train_loader):
                 samples = samples.to(device, non_blocking=True)
                 batch_size = samples.size(0)
@@ -136,7 +119,7 @@ def train_discriminator_only(args):
                 real_output = discriminator(samples)
                 real_loss = criterion(real_output, torch.ones_like(real_output))
 
-                # External data acts as 'fake'
+                # External data acts as 'fake' or your negative examples
                 try:
                     external_samples, _ = next(external_iter)
                 except StopIteration:
@@ -146,24 +129,22 @@ def train_discriminator_only(args):
                 external_output = discriminator(external_samples)
                 external_loss = criterion(external_output, torch.zeros_like(external_output))
 
-                total_d_loss = real_loss + external_loss
+                # Combined D loss
+                d_loss = real_loss + external_loss
 
+                # Backprop
                 d_optimizer.zero_grad()
                 with autocast():
-                    loss = real_loss + external_loss
-                scaler.scale(loss).backward()
+                    total_d_loss = real_loss + external_loss
+                scaler.scale(total_d_loss).backward()
                 scaler.step(d_optimizer)
                 scaler.update()
 
-                epoch_loss += total_d_loss.item()
-                batch_count += 1
-                global_step += 1
-
-                # Log metrics per batch (optional)
-                if global_step % 10 == 0:
-                    d_loss_val = total_d_loss.item()
+                # Print logs
+                d_loss_val = total_d_loss.item()
+                if global_step % 2 == 0:
                     with torch.no_grad():
-                        # Evaluate metrics at multiple thresholds
+                        # Evaluate metrics at multiple thresholds, if desired
                         real_output_flat = real_output.view(-1)
                         external_output_flat = external_output.view(-1)
                         real_targets = torch.ones_like(real_output_flat)
@@ -189,57 +170,27 @@ def train_discriminator_only(args):
                         writer.add_scalar('Metrics/BestF1', best_f1, global_step)
                         writer.add_scalar('Metrics/BestAcc', best_acc, global_step)
 
-                    print(f"Epoch [{epoch}/{args.epochs}], Step [{batch_idx}/{len(train_loader)}], D_Loss={d_loss_val:.4f}")
+                if global_step % 10 == 0:
+                    print(f"Epoch [{epoch}/{args.epochs}], Step [{batch_idx}/{len(train_loader)}], "
+                          f"D_Loss={d_loss_val:.4f}")
 
-                # Save periodic checkpoint if needed
+                # Save checkpoint if needed
+                global_step += 1
                 if (global_step % args.checkpoint_step == 0) and (global_step > 0):
                     save_discriminator_checkpoint(args, discriminator, d_optimizer, global_step)
 
-                # Cleanup
+                # Cleanup references
                 del samples, external_samples
                 torch.cuda.empty_cache()
 
-            # End of epoch: compute average loss
-            avg_epoch_loss = epoch_loss / batch_count
-            print(f"Epoch {epoch} average loss: {avg_epoch_loss:.6f}")
-
-            # Step the LR scheduler
-            scheduler.step(avg_epoch_loss)
-
-            # Log current learning rate
-            current_lr = d_optimizer.param_groups[0]['lr']
-            writer.add_scalar('LearningRate', current_lr, epoch)
-            print(f"Epoch {epoch} current LR: {current_lr}")
-
-            # Check if we have an improvement; use avg_epoch_loss as criteria
-            if avg_epoch_loss < global_best_loss:
-                global_best_loss = avg_epoch_loss
-                best_state = {
-                    "discriminator": discriminator.state_dict(),
-                    "d_optimizer": d_optimizer.state_dict(),
-                    "global_step": global_step
-                }
-                patience_counter = 0
-                # Save the best checkpoint in-place (replacing old best)
-                save_discriminator_checkpoint(args, discriminator, d_optimizer, global_step, suffix="_best")
-                print(f"New best model at epoch {epoch} with loss {avg_epoch_loss:.6f}")
-            else:
-                patience_counter += 1
-                print(f"No improvement for {patience_counter} epoch(s).")
-
-            # If patience is exceeded, restore best model and reset patience counter
-            if patience_counter >= args.patience:
-                if best_state is not None:
-                    print(f"Restoring best model weights after {patience_counter} epochs with no improvement.")
-                    discriminator.load_state_dict(best_state["discriminator"])
-                    d_optimizer.load_state_dict(best_state["d_optimizer"])
-                    patience_counter = 0
-
     except KeyboardInterrupt:
+        # -----------------------------------------------
+        # Catch the Ctrl+C, save checkpoint, then re-raise
+        # -----------------------------------------------
         print("\nKeyboardInterrupt detected, saving latest checkpoint...")
         save_discriminator_checkpoint(args, discriminator, d_optimizer, global_step)
         print("Checkpoint saved. Exiting now.")
-        raise
+        raise  # or return if you prefer a silent exit
 
     print("Discriminator-only training complete.")
 
@@ -252,9 +203,9 @@ def main():
                         help="Directory for negative examples or external data")
     parser.add_argument('--disc_checkpoint', type=str, default=None,
                         help="Load an existing discriminator checkpoint")
-    parser.add_argument('--checkpoint_dir', type=str, default="logdir_dv2",
+    parser.add_argument('--checkpoint_dir', type=str, default="logdir_dv2_1",
                         help="Where to save new checkpoints")
-    parser.add_argument('--epochs', type=int, default=2000)
+    parser.add_argument('--epochs', type=int, default=10000)
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--d_learning_rate', type=float, default=0.001)
     parser.add_argument('--use_cuda', action='store_true', default=True)
@@ -263,10 +214,6 @@ def main():
                         help="Conditioning window size (if needed by collate)")
     parser.add_argument('--checkpoint_step', type=int, default=1000,
                         help="Save checkpoint every N steps")
-    parser.add_argument('--patience', type=int, default=10,
-                        help="Number of epochs with no improvement to wait before reducing LR and restoring best weights")
-    parser.add_argument('--min_lr', type=float, default=1e-6,
-                        help="Minimum learning rate for the scheduler")
 
     args = parser.parse_args()
     train_discriminator_only(args)
