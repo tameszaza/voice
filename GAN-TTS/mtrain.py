@@ -61,7 +61,6 @@ def calculate_orthogonal_loss(encoder, generator_outputs):
             inner_product = (f_i * f_j).sum(dim=1)
             norm_product = (f_i.norm(dim=1) * f_j.norm(dim=1) + 1e-8)
             orth_loss += (inner_product / norm_product).mean()
-    
     return orth_loss
 
 def restore_optimizers(g_optimizers, d_optimizer, checkpoint):
@@ -213,7 +212,6 @@ def train(args):
                 orth_loss_val = calculate_orthogonal_loss(encoder, generator_outputs)
                 # Scale orthogonal loss by number of generators since it's shared
                 orth_loss_val = orth_loss_val / len(generators)
-                orth_loss_val -=2.0
 
             # Update each generator separately
             for idx, (generator, g_optim, g_out) in enumerate(zip(generators, g_optimizers, generator_outputs)):

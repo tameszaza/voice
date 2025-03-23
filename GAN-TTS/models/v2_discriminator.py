@@ -49,7 +49,7 @@ class Discriminator(nn.Module):
 if __name__ == '__main__':
 
     model = Discriminator()
-    x = torch.randn(3, 1, 24000)
+    x = torch.randn(3, 1, 24000) # [B, C, T]
 
     score = model(x)
     print(score.shape)

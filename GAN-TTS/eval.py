@@ -2,7 +2,7 @@ import torch
 import os
 import numpy as np
 from utils.audio import convert_audio
-from models.v3_discriminator import Discriminator
+from models.v4_discriminator import Discriminator
 from torchmetrics.classification import BinaryAccuracy, BinaryPrecision, BinaryRecall, BinaryF1Score
 from tqdm import tqdm
 from tabulate import tabulate
@@ -421,8 +421,8 @@ def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     
     # Construct absolute paths
-    dataset_dir = os.path.abspath(os.path.join(script_dir, "../data_train/train"))
-    checkpoint_path = os.path.join(script_dir, "logdir_dv3/disc_only_step_17000.pth")
+    dataset_dir = os.path.abspath(os.path.join(script_dir, "../data_train/eval"))
+    checkpoint_path = os.path.join(script_dir, "logdir_dv4/disc_only_step_147000.pth")
     condition_window = 100
     upsample_factor = 120
     sample_window = condition_window * upsample_factor
@@ -479,7 +479,7 @@ def main():
         real_eval_data=real_data,
         fake_eval_data=fake_data,
         device=device,
-        output_dir="./plots/disc_onlyv3_train_step_17000"
+        output_dir="./plots/disc_onlyv4_i_step_147000"
     )
 
 if __name__ == "__main__":

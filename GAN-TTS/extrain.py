@@ -14,7 +14,8 @@ from tensorboardX import SummaryWriter
 # Import your existing modules (same as in your code above).
 # ------------------------------------------------------------------
 from utils.dataset import CustomerDataset, CustomerCollate
-from models.v2_discriminator import Discriminator
+# from models.v4_discriminator import Discriminator
+from models.AASIST import Discriminator
 from utils.audio import hop_length
 from utils.loss import MultiResolutionSTFTLoss
 from torchmetrics.classification import BinaryAccuracy, BinaryPrecision, BinaryRecall, BinaryF1Score
@@ -82,13 +83,25 @@ def train_discriminator_only(args):
     external_iter = iter(external_loader)
 
     # Initialize Discriminator
-    discriminator = Discriminator().to(device)
+    d_args = {
+        "filts": [[80], [1, 80], [80, 160], [160, 160], [160, 160]],
+        "gat_dims": [128, 64],
+        "pool_ratios": [0.64, 0.81, 0.64],
+        "temperatures": [0.1, 0.2, 0.3],
+        "first_conv": 251
+    }
+    discriminator = Discriminator(d_args).to(device)
+
 
     # Loss
-    criterion = nn.MSELoss().to(device)
+    criterion = nn.BCELoss().to(device)
 
-    # Optimizer
+    # Optimizer and Learning Rate Scheduler using ReduceLROnPlateau with a minimum lr:
     d_optimizer = optim.Adam(discriminator.parameters(), lr=args.d_learning_rate)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        d_optimizer, mode='min', factor=args.lr_gamma, patience=args.lr_patience,
+        verbose=True, min_lr=args.min_lr
+    )
     scaler = GradScaler()
 
     # Load from optional checkpoint
@@ -111,12 +124,14 @@ def train_discriminator_only(args):
     # ----------------------------------------------------------
     try:
         for epoch in range(args.epochs):
+            epoch_loss = 0.0
+            batch_count = 0
             for batch_idx, (samples, conditions) in enumerate(train_loader):
                 samples = samples.to(device, non_blocking=True)
                 batch_size = samples.size(0)
 
                 # Real data: label=1
-                real_output = discriminator(samples)
+                _, real_output = discriminator(samples)
                 real_loss = criterion(real_output, torch.ones_like(real_output))
 
                 # External data acts as 'fake' or your negative examples
@@ -126,9 +141,8 @@ def train_discriminator_only(args):
                     external_iter = iter(external_loader)
                     external_samples, _ = next(external_iter)
                 external_samples = external_samples.to(device, non_blocking=True)
-                external_output = discriminator(external_samples)
+                _ , external_output = discriminator(external_samples)
                 external_loss = criterion(external_output, torch.zeros_like(external_output))
-
                 # Combined D loss
                 d_loss = real_loss + external_loss
 
@@ -140,11 +154,19 @@ def train_discriminator_only(args):
                 scaler.step(d_optimizer)
                 scaler.update()
 
-                # Print logs
+                # Log the loss for this batch to compute the epoch average later
                 d_loss_val = total_d_loss.item()
+                epoch_loss += d_loss_val
+                batch_count += 1
+
+                # Print logs periodically
+                if global_step % 10 == 0:
+                    print(f"Epoch [{epoch}/{args.epochs}], Step [{batch_idx}/{len(train_loader)}], "
+                          f"D_Loss={d_loss_val:.4f}")
+
+                # Optionally log metrics
                 if global_step % 2 == 0:
                     with torch.no_grad():
-                        # Evaluate metrics at multiple thresholds, if desired
                         real_output_flat = real_output.view(-1)
                         external_output_flat = external_output.view(-1)
                         real_targets = torch.ones_like(real_output_flat)
@@ -170,27 +192,28 @@ def train_discriminator_only(args):
                         writer.add_scalar('Metrics/BestF1', best_f1, global_step)
                         writer.add_scalar('Metrics/BestAcc', best_acc, global_step)
 
-                if global_step % 10 == 0:
-                    print(f"Epoch [{epoch}/{args.epochs}], Step [{batch_idx}/{len(train_loader)}], "
-                          f"D_Loss={d_loss_val:.4f}")
+                global_step += 1
 
                 # Save checkpoint if needed
-                global_step += 1
                 if (global_step % args.checkpoint_step == 0) and (global_step > 0):
                     save_discriminator_checkpoint(args, discriminator, d_optimizer, global_step)
 
-                # Cleanup references
+                # Cleanup
                 del samples, external_samples
                 torch.cuda.empty_cache()
 
+            # Calculate the average loss for the epoch
+            avg_loss = epoch_loss / batch_count if batch_count else epoch_loss
+            # Call scheduler to adjust the learning rate based on the epoch's average loss
+            scheduler.step(avg_loss)
+            current_lr = d_optimizer.param_groups[0]['lr']
+            print(f"Epoch {epoch} completed. Average Loss: {avg_loss:.4f}. Current learning rate: {current_lr}")
+
     except KeyboardInterrupt:
-        # -----------------------------------------------
-        # Catch the Ctrl+C, save checkpoint, then re-raise
-        # -----------------------------------------------
         print("\nKeyboardInterrupt detected, saving latest checkpoint...")
         save_discriminator_checkpoint(args, discriminator, d_optimizer, global_step)
         print("Checkpoint saved. Exiting now.")
-        raise  # or return if you prefer a silent exit
+        raise
 
     print("Discriminator-only training complete.")
 
@@ -203,10 +226,10 @@ def main():
                         help="Directory for negative examples or external data")
     parser.add_argument('--disc_checkpoint', type=str, default=None,
                         help="Load an existing discriminator checkpoint")
-    parser.add_argument('--checkpoint_dir', type=str, default="logdir_dv2_1",
+    parser.add_argument('--checkpoint_dir', type=str, default="logdir_dAA",
                         help="Where to save new checkpoints")
     parser.add_argument('--epochs', type=int, default=10000)
-    parser.add_argument('--batch_size', type=int, default=128)
+    parser.add_argument('--batch_size', type=int, default=4)
     parser.add_argument('--d_learning_rate', type=float, default=0.001)
     parser.add_argument('--use_cuda', action='store_true', default=True)
     parser.add_argument('--num_workers', type=int, default=4)
@@ -214,7 +237,14 @@ def main():
                         help="Conditioning window size (if needed by collate)")
     parser.add_argument('--checkpoint_step', type=int, default=1000,
                         help="Save checkpoint every N steps")
-
+    # New arguments for ReduceLROnPlateau
+    parser.add_argument('--lr_gamma', type=float, default=0.1,
+                        help="Factor by which the learning rate will be reduced")
+    parser.add_argument('--lr_patience', type=int, default=10,
+                        help="Number of epochs with no improvement after which learning rate will be reduced")
+    parser.add_argument('--min_lr', type=float, default=1e-8,
+                        help="Minimum learning rate allowed")
+    
     args = parser.parse_args()
     train_discriminator_only(args)
 
