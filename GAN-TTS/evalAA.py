@@ -2,7 +2,7 @@ import torch
 import os
 import numpy as np
 from utils.audio import convert_audio
-from models.v2_discriminator import Discriminator
+from models.AASIST import Discriminator
 from torchmetrics.classification import BinaryAccuracy, BinaryPrecision, BinaryRecall, BinaryF1Score
 from tqdm import tqdm
 from tabulate import tabulate
@@ -169,11 +169,11 @@ def evaluate_discriminator(discriminator, test_data, test_labels, device, output
     for (audio, mel), label in tqdm(zip(test_data, test_labels), desc="Evaluating", total=len(test_data)):
         audio_tensor = torch.FloatTensor(audio).unsqueeze(0).unsqueeze(0).to(device)
         mel_tensor = torch.FloatTensor(mel).unsqueeze(0).permute(0, 2, 1).to(device)
-
         with torch.no_grad():
-            output = discriminator(audio_tensor)
+            # New architecture returns (last_hidden, output)
+            _, out_tensor = discriminator(audio_tensor)
         
-        prob = output.mean(dim=-1).item()
+        prob = out_tensor.squeeze().item()
         all_probs.append(prob)
         all_targets.append(label)
 
@@ -421,8 +421,8 @@ def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     
     # Construct absolute paths
-    dataset_dir = os.path.abspath(os.path.join(script_dir, "../data_train/train"))
-    checkpoint_path = os.path.join(script_dir, "logdir_noex_5/mgan_step_380000.pth")
+    dataset_dir = os.path.abspath(os.path.join(script_dir, "../data_train/eval"))
+    checkpoint_path = os.path.join(script_dir, "logdir_dAA/disc_only_step_1024000.pth")
     condition_window = 100
     upsample_factor = 120
     sample_window = condition_window * upsample_factor
@@ -443,7 +443,14 @@ def main():
     checkpoint = torch.load(checkpoint_path, map_location=device)
     
     # Load discriminator
-    discriminator = Discriminator().to(device)
+    d_args = {
+        "filts": [[80], [1, 80], [80, 160], [160, 160], [160, 160]],
+        "gat_dims": [128, 64],
+        "pool_ratios": [0.64, 0.81, 0.64],
+        "temperatures": [0.1, 0.2, 0.3],
+        "first_conv": 251
+    }
+    discriminator = Discriminator(d_args).to(device)
     discriminator.load_state_dict(checkpoint["discriminator"])
     discriminator.eval()
     
@@ -461,16 +468,16 @@ def main():
     print(f"Loaded {len(generators)} generators")
 
     # 2) Preprocess evaluation data separately for real and fake
-    real_dir = os.path.join(dataset_dir, "real")
-    fake_dir = os.path.join(dataset_dir, "fake")
+    real_dir = os.path.join(dataset_dir, "fake")
+    fake_dir = os.path.join(dataset_dir, "real")
     
     print(f"\nProcessing real directory: {real_dir}")
     real_data, _ = preprocess_test_data(real_dir, condition_window, sample_window, 
-                                      upsample_factor, max_clips_per_class=2000)
+                                      upsample_factor, max_clips_per_class=7000)
     
     print(f"\nProcessing fake directory: {fake_dir}")
     fake_data, _ = preprocess_test_data(fake_dir, condition_window, sample_window, 
-                                      upsample_factor, max_clips_per_class=2000)
+                                      upsample_factor, max_clips_per_class=7000)
 
     # 3) Evaluate both scenarios
     evaluate_all_scenarios(
@@ -479,7 +486,7 @@ def main():
         real_eval_data=real_data,
         fake_eval_data=fake_data,
         device=device,
-        output_dir="./plots/train_noex_5_step_380000"
+        output_dir="./plots/disc_onlyvAA_step_1024000_2"
     )
 
 if __name__ == "__main__":

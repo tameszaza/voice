@@ -229,8 +229,8 @@ def main():
     parser.add_argument('--checkpoint_dir', type=str, default="logdir_dAA",
                         help="Where to save new checkpoints")
     parser.add_argument('--epochs', type=int, default=10000)
-    parser.add_argument('--batch_size', type=int, default=4)
-    parser.add_argument('--d_learning_rate', type=float, default=0.001)
+    parser.add_argument('--batch_size', type=int, default=5)
+    parser.add_argument('--d_learning_rate', type=float, default=0.00001)
     parser.add_argument('--use_cuda', action='store_true', default=True)
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--condition_window', type=int, default=100,
@@ -242,7 +242,7 @@ def main():
                         help="Factor by which the learning rate will be reduced")
     parser.add_argument('--lr_patience', type=int, default=10,
                         help="Number of epochs with no improvement after which learning rate will be reduced")
-    parser.add_argument('--min_lr', type=float, default=1e-8,
+    parser.add_argument('--min_lr', type=float, default=1e-9,
                         help="Minimum learning rate allowed")
     
     args = parser.parse_args()

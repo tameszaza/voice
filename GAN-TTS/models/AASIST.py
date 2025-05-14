@@ -531,7 +531,7 @@ class Discriminator(nn.Module):
         if x.dim() == 2:          # x is [B, T]
             x = x.unsqueeze(1)    # Make it [B, 1, T]
         x = self.conv_time(x, mask=Freq_aug)
-        print("Shape after conv_time:", x.shape)
+        # print("Shape after conv_time:", x.shape)
 
         x = F.max_pool1d(torch.abs(x), 3)  # still 3D
         x = x.unsqueeze(1)  # ✅ this one is correct: needed for BatchNorm2d

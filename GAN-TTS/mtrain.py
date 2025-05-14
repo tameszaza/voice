@@ -187,9 +187,9 @@ def train(args):
             external_output = discriminator(external_samples)
 
             # Discriminator loss calculation - use BCE or MSE consistently
-            real_loss = args.d_lr_scale * criterion(real_output, torch.ones_like(real_output))  # Target 1 for real
-            fake_loss = args.d_lr_scale * sum(criterion(f_out, torch.zeros_like(f_out)) for f_out in fake_outputs) / len(fake_outputs)  # Target 0 for fake
-            external_loss = args.d_lr_scale * criterion(external_output, torch.zeros_like(external_output))  # Target 0 for external
+            real_loss = criterion(real_output, torch.ones_like(real_output))  # Target 1 for real
+            fake_loss = sum(criterion(f_out, torch.zeros_like(f_out)) for f_out in fake_outputs) / len(fake_outputs)  # Target 0 for fake
+            external_loss = criterion(external_output, torch.zeros_like(external_output))  # Target 0 for external
             d_loss = real_loss + args.lambda_fake * fake_loss + args.lambda_ex * external_loss
 
             # Update Discriminator
@@ -236,99 +236,45 @@ def train(args):
             ##############################
             #   Logging / TensorBoard
             ##############################
-            d_loss_val = d_loss.item()/args.d_lr_scale
-            real_loss_val = real_loss.item()/args.d_lr_scale
-            fake_loss_val = fake_loss.item()/args.d_lr_scale
-            external_loss_val = external_loss.item()/args.d_lr_scale
-            total_g_loss_val = total_g_loss/args.d_lr_scale  # Use accumulated generator loss
+            d_loss_val = d_loss.item()
+            real_loss_val = real_loss.item()
+            fake_loss_val = fake_loss.item()
+            external_loss_val = external_loss.item()
+            total_g_loss_val = total_g_loss  # Use accumulated generator loss
 
             if global_step % 100 == 0:
                 with torch.no_grad():
-                    # Prepare predictions and targets
-                    real_output_flat = real_output.view(-1)
-                    fake_outputs_flat = torch.cat([f_out.view(-1) for f_out in fake_outputs], dim=0)
-                    external_output_flat = external_output.view(-1)
+                    real_preds = (real_output > 0.5).float().view(-1)  # Should predict 1 for real
+                    fake_preds = torch.cat([(f_out > 0.5).float().view(-1) for f_out in fake_outputs], dim=0)  # Should predict 0 for fake
+                    external_preds = (external_output > 0.5).float().view(-1)  # Should predict 0 for external
 
-                    # Targets
-                    real_targets = torch.ones_like(real_output_flat)
-                    fake_targets = torch.zeros_like(fake_outputs_flat)
-                    external_targets = torch.zeros_like(external_output_flat)
+                    real_targets = torch.ones_like(real_preds)  # Real samples are 1
+                    fake_targets = torch.zeros_like(fake_preds)  # Fake samples are 0
+                    external_targets = torch.zeros_like(external_preds)  # External samples are 0
 
-                    # Lists to store metrics
-                    thresholds = torch.linspace(0.1, 0.9, 9).to(device)
-                    best_metrics = {
-                        'fake_vs_real': {'f1': 0, 'acc': 0, 'threshold_f1': 0.5, 'threshold_acc': 0.5},
-                        'ext_vs_real': {'f1': 0, 'acc': 0, 'threshold_f1': 0.5, 'threshold_acc': 0.5},
-                        'all_vs_real': {'f1': 0, 'acc': 0, 'threshold_f1': 0.5, 'threshold_acc': 0.5}
-                    }
+                    all_preds = torch.cat([real_preds, fake_preds, external_preds], dim=0)
+                    all_targets = torch.cat([real_targets, fake_targets, external_targets], dim=0)
 
-                    # Sweep thresholds
-                    for threshold in thresholds:
-                        # Fake vs Real
-                        preds_fake_real = torch.cat([
-                            (real_output_flat > threshold).float(),
-                            (fake_outputs_flat > threshold).float()
-                        ])
-                        targets_fake_real = torch.cat([real_targets, fake_targets])
-                        f1 = f1_fn(preds_fake_real, targets_fake_real)
-                        acc = accuracy_fn(preds_fake_real, targets_fake_real)
-                        if f1 > best_metrics['fake_vs_real']['f1']:
-                            best_metrics['fake_vs_real']['f1'] = f1
-                            best_metrics['fake_vs_real']['threshold_f1'] = threshold
-                        if acc > best_metrics['fake_vs_real']['acc']:
-                            best_metrics['fake_vs_real']['acc'] = acc
-                            best_metrics['fake_vs_real']['threshold_acc'] = threshold
+                    total_precision = precision_fn(all_preds, all_targets)
+                    total_recall = recall_fn(all_preds, all_targets)
+                    total_f1 = f1_fn(all_preds, all_targets)
+                    total_accuracy = accuracy_fn(all_preds, all_targets)
 
-                        # External vs Real
-                        preds_ext_real = torch.cat([
-                            (real_output_flat > threshold).float(),
-                            (external_output_flat > threshold).float()
-                        ])
-                        targets_ext_real = torch.cat([real_targets, external_targets])
-                        f1 = f1_fn(preds_ext_real, targets_ext_real)
-                        acc = accuracy_fn(preds_ext_real, targets_ext_real)
-                        if f1 > best_metrics['ext_vs_real']['f1']:
-                            best_metrics['ext_vs_real']['f1'] = f1
-                            best_metrics['ext_vs_real']['threshold_f1'] = threshold
-                        if acc > best_metrics['ext_vs_real']['acc']:
-                            best_metrics['ext_vs_real']['acc'] = acc
-                            best_metrics['ext_vs_real']['threshold_acc'] = threshold
-
-                        # All vs Real
-                        preds_all = torch.cat([
-                            (real_output_flat > threshold).float(),
-                            (fake_outputs_flat > threshold).float(),
-                            (external_output_flat > threshold).float()
-                        ])
-                        targets_all = torch.cat([real_targets, fake_targets, external_targets])
-                        f1 = f1_fn(preds_all, targets_all)
-                        acc = accuracy_fn(preds_all, targets_all)
-                        if f1 > best_metrics['all_vs_real']['f1']:
-                            best_metrics['all_vs_real']['f1'] = f1
-                            best_metrics['all_vs_real']['threshold_f1'] = threshold
-                        if acc > best_metrics['all_vs_real']['acc']:
-                            best_metrics['all_vs_real']['acc'] = acc
-                            best_metrics['all_vs_real']['threshold_acc'] = threshold
-
-                    # Log best metrics
-                    writer.add_scalar('Loss/Discriminator_Total', d_loss_val, global_step)
-                    writer.add_scalar('Loss/Discriminator_Real', real_loss_val, global_step)
-                    writer.add_scalar('Loss/Discriminator_Fake', fake_loss_val, global_step)
-                    writer.add_scalar('Loss/Discriminator_External', external_loss_val, global_step)
-                    
-                    for key in best_metrics:
-                        writer.add_scalar(f'Metrics/{key}_Best_F1', best_metrics[key]['f1'], global_step)
-                        writer.add_scalar(f'Metrics/{key}_Best_Accuracy', best_metrics[key]['acc'], global_step)
-                        writer.add_scalar(f'Metrics/{key}_Best_F1_Threshold', best_metrics[key]['threshold_f1'], global_step)
-                        writer.add_scalar(f'Metrics/{key}_Best_Acc_Threshold', best_metrics[key]['threshold_acc'], global_step)
-
-                    writer.add_scalar('Loss/Generators_Total', total_g_loss_val, global_step)
-                    if len(generators) > 1:
-                        writer.add_scalar('Loss/Orthogonal', orth_loss_val, global_step)
-                    for idx, g_out in enumerate(generator_outputs):
-                        sc_loss, mag_loss = stft_criterion(g_out.squeeze(1), samples.squeeze(1))
-                        writer.add_scalar(f'Loss/Generator_{idx}_SpectralConvergence', sc_loss.item(), global_step)
-                        writer.add_scalar(f'Loss/Generator_{idx}_Magnitude', mag_loss.item(), global_step)
+                writer.add_scalar('Loss/Discriminator_Total', d_loss_val, global_step)
+                writer.add_scalar('Loss/Discriminator_Real', real_loss_val, global_step)
+                writer.add_scalar('Loss/Discriminator_Fake', fake_loss_val, global_step)
+                writer.add_scalar('Loss/Discriminator_External', external_loss_val, global_step)
+                writer.add_scalar('Metrics/Discriminator_Precision', total_precision, global_step)
+                writer.add_scalar('Metrics/Discriminator_Recall', total_recall, global_step)
+                writer.add_scalar('Metrics/Discriminator_F1', total_f1, global_step)
+                writer.add_scalar('Metrics/Discriminator_Accuracy', total_accuracy, global_step)
+                writer.add_scalar('Loss/Generators_Total', total_g_loss_val, global_step)
+                if len(generators) > 1:
+                    writer.add_scalar('Loss/Orthogonal', orth_loss_val, global_step)
+                for idx, g_out in enumerate(generator_outputs):
+                    sc_loss, mag_loss = stft_criterion(g_out.squeeze(1), samples.squeeze(1))
+                    writer.add_scalar(f'Loss/Generator_{idx}_SpectralConvergence', sc_loss.item(), global_step)
+                    writer.add_scalar(f'Loss/Generator_{idx}_Magnitude', mag_loss.item(), global_step)
 
             print(f"Step {global_step}: "
                   f"D_Loss={d_loss_val:.4f}, "
@@ -371,7 +317,6 @@ def main():
     parser.add_argument('--condition_window', type=int, default=100, help="Conditioning window size")
     parser.add_argument('--external_generator_data', type=str, required=True,
                         help="Path to external generator .wav data")
-    parser.add_argument('--d_lr_scale', type=float, default=1.0, help="Scaling factor for discriminator loss")
 
     args = parser.parse_args()
     train(args)
