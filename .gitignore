@@ -18,3 +18,4 @@ data_tts/
 GAN-TTS/data_ex
 data*
 __pycache__/
+ASVspoof*
