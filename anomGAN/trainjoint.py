@@ -117,7 +117,7 @@ def train(args):
     opt_G = torch.optim.Adam(G.parameters(), lr=args.lr, betas=(0.5, 0.9))
     opt_E = torch.optim.Adam(E.parameters(), lr=args.lr, betas=(0.5, 0.9))
     opt_C = torch.optim.Adam(C.parameters(), lr=args.lr, betas=(0.5, 0.9))
-    opt_B = torch.optim.Adam(B.parameters(), lr=args.lr, betas=(0.5, 0.9))
+    opt_B = torch.optim.Adam(B.parameters(), lr=args.lr*10, betas=(0.5, 0.9))
 
     writer = SummaryWriter(args.log_dir)
     d_steps = 0
@@ -228,7 +228,7 @@ if __name__ == "__main__":
     p.add_argument("--mel_dir",      default=None, help="Directory containing MEL features (optional)")
     p.add_argument("--mfcc_dir",     default=None, help="Directory containing MFCC features (optional)")
     p.add_argument("--log_dir",      required=True)
-    p.add_argument("--batch_size",   type=int, default=256)
+    p.add_argument("--batch_size",   type=int, default=64)
     p.add_argument("--epochs",       type=int, default=1000)
     p.add_argument("--z_dim",        type=int, default=128)
     p.add_argument("--n_clusters",   type=int, default=10)
