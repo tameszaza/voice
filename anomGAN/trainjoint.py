@@ -229,7 +229,7 @@ if __name__ == "__main__":
     p.add_argument("--mfcc_dir",     default=None, help="Directory containing MFCC features (optional)")
     p.add_argument("--log_dir",      required=True)
     p.add_argument("--batch_size",   type=int, default=64)
-    p.add_argument("--epochs",       type=int, default=100)
+    p.add_argument("--epochs",       type=int, default=1000)
     p.add_argument("--z_dim",        type=int, default=128)
     p.add_argument("--n_clusters",   type=int, default=10)
     p.add_argument("--n_critic",     type=int, default=5)
