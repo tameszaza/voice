@@ -114,27 +114,27 @@ def inference(args):
     C = Classifier(in_channels=feat.shape[1], n_clusters=args.n_clusters).to(device)
 
     # Print model summaries
-    try:
-        from torchinfo import summary
-        print("==== MultiGenerator ====")
-        summary(G, input_data=(torch.zeros(1, args.z_dim, device=device), torch.zeros(1, dtype=torch.long, device=device)), 
-                kwargs={"target_hw": (H, W)})
-        print("==== MultiEncoder ====")
-        summary(E, input_data=(torch.zeros(1, C_in, H, W, device=device), torch.zeros(1, dtype=torch.long, device=device)))
-        print("==== Discriminator ====")
-        summary(D, input_data=torch.zeros(1, C_in, H, W, device=device))
-        print("==== Classifier ====")
-        summary(C, input_data=torch.zeros(1, feat.shape[1], feat.shape[2], feat.shape[3], device=device))
-    except ImportError:
-        print("torchinfo not installed, printing model structures instead.")
-        print("==== MultiGenerator ====")
-        print(G)
-        print("==== MultiEncoder ====")
-        print(E)
-        print("==== Discriminator ====")
-        print(D)
-        print("==== Classifier ====")
-        print(C)
+    # try:
+    #     from torchinfo import summary
+    #     print("==== MultiGenerator ====")
+    #     summary(G, input_data=(torch.zeros(1, args.z_dim, device=device), torch.zeros(1, dtype=torch.long, device=device)), 
+    #             kwargs={"target_hw": (H, W)})
+    #     print("==== MultiEncoder ====")
+    #     summary(E, input_data=(torch.zeros(1, C_in, H, W, device=device), torch.zeros(1, dtype=torch.long, device=device)))
+    #     print("==== Discriminator ====")
+    #     summary(D, input_data=torch.zeros(1, C_in, H, W, device=device))
+    #     print("==== Classifier ====")
+    #     summary(C, input_data=torch.zeros(1, feat.shape[1], feat.shape[2], feat.shape[3], device=device))
+    # except ImportError:
+    #     print("torchinfo not installed, printing model structures instead.")
+    #     print("==== MultiGenerator ====")
+    #     print(G)
+    #     print("==== MultiEncoder ====")
+    #     print(E)
+    #     print("==== Discriminator ====")
+    #     print(D)
+    #     print("==== Classifier ====")
+    #     print(C)
 
     # Print number of parameters for each model
     def count_params(model):

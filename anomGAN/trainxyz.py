@@ -137,7 +137,7 @@ if __name__ == "__main__":
     p.add_argument("--ckpt_suffix",  required=True,
                    help="Suffix used in saved first-phase .pt files")
     p.add_argument("--batch_size",   type=int,   default=64)
-    p.add_argument("--epochs",       type=int,   default=100,
+    p.add_argument("--epochs",       type=int,   default=1000,
                    help="Number of x–z–x training epochs")
     p.add_argument("--lr",           type=float, default=1e-4)
     p.add_argument("--save_every",   type=int,   default=10,
