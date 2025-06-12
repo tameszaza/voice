@@ -1,0 +1,2 @@
+data_wavefake:
+- Sampling rate = 22050

@@ -20,3 +20,4 @@ data*
 __pycache__/
 ASVspoof*
 log*
+*.zip

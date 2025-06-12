@@ -1,0 +1,4 @@
+AUC:         0.3830
+Best F1:     0.6667 @ thr=0.8380
+Accuracy@F1: 0.5000
+ErrRate@F1:  0.5000

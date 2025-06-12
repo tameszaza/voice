@@ -1,0 +1,19 @@
+Inference config
+----------------------------------------
+real_data_root: data_40
+anomaly_data_dir: data_40_real
+model_dir: logdir_mel_40
+ckpt: 220
+out_dir: results
+batch_size: 64
+z_dim: 128
+n_clusters: 7
+base_channels: 32
+n_layers: 3
+alpha: 0.9
+n_thresholds: 200
+use_mel: True
+use_mfcc: False
+device: cuda
+max_samples_per_class: 3000
+feature_channels: 1

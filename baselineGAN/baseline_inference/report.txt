@@ -1,0 +1,15 @@
+AUC:            0.6442
+
+Best F1 Metrics:
+F1:             0.6673 @ thr=80.3991
+Accuracy:       0.5027
+Error Rate:     0.4973
+Precision:      0.5013
+Recall:         0.9977
+
+Best Accuracy Metrics:
+Accuracy:       0.6203 @ thr=107.8641
+F1:             0.4987
+Error Rate:     0.3797
+Precision:      0.7338
+Recall:         0.3777

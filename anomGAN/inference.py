@@ -159,72 +159,72 @@ def inference(args):
     C.load_state_dict(torch.load(os.path.join(md, f"C_{ck}.pt"), map_location=device))
 
     G.eval(); E.eval(); D.eval(); C.eval()
-    # ------------------------------------------------------------
-    # DEBUG: visualize first 5 real samples vs. their reconstructions
-    import numpy as np
-    import matplotlib.pyplot as plt
-
-    # --- DEBUG: visualize first 5 reconstructions and print cluster k ---
-    debug_dir = os.path.join(args.out_dir, "debug_first5")
+    
+    # --- DEBUG: visualize reconstructions from all generators ---
+    debug_dir = os.path.join(args.out_dir, "debug_all_generators")
     os.makedirs(debug_dir, exist_ok=True)
 
-    # Visualize first 5 real and first 5 fake samples
-    debug_samples = []
-    real_count, fake_count = 0, 0
-    for i in range(len(ds)):
+    # Get indices of real and fake samples
+    real_indices = [i for i, (_, _, lbl) in enumerate(ds.samples) if lbl == 0]
+    fake_indices = [i for i, (_, _, lbl) in enumerate(ds.samples) if lbl == 1]
+    
+    # Randomly sample samples from each class
+    np.random.seed(args.seed)
+    debug_indices = (np.random.choice(real_indices, size=10, replace=False).tolist() + 
+                    np.random.choice(fake_indices, size=10, replace=False).tolist())
+
+    for i in debug_indices:
         x, lbl = ds[i]
-        if lbl == 0 and real_count < 5:
-            debug_samples.append((i, x, lbl))
-            real_count += 1
-        elif lbl == 1 and fake_count < 5:
-            debug_samples.append((i, x, lbl))
-            fake_count += 1
-        if real_count >= 5 and fake_count >= 5:
-            break
-
-    for i, x, lbl in debug_samples:
         x = x.unsqueeze(0).to(device)   # shape (1, C, H, W)
+        
+        # Get reconstruction from each generator
+        n_clusters = args.n_clusters
+        reconstructions = []
+        errors = []
+        
+        for k in range(n_clusters):
+            # encode and reconstruct with current generator
+            with torch.no_grad():
+                z_hat = E(x, torch.tensor([k], device=device))
+                x_hat = G(z_hat, torch.tensor([k], device=device), target_hw=(H, W))
+                rec_err = torch.norm((x - x_hat).view(x.size(0), -1), dim=1).item()
+                reconstructions.append(x_hat.cpu().numpy())
+                errors.append(rec_err)
 
-        # 1) cluster assignment
+        # Get predicted cluster from classifier
         feat_x = D.intermediate(x)
-        q_x    = F.softmax(C(feat_x), dim=1)
-        k_idx  = q_x.argmax(dim=1).item()
+        q_x = F.softmax(C(feat_x), dim=1)
+        k_pred = q_x.argmax(dim=1).item()
 
-        # 2) encode + reconstruct
-        with torch.no_grad():
-            z_hat = E(x, torch.tensor([k_idx], device=device))
-            x_hat = G(z_hat, torch.tensor([k_idx], device=device), target_hw=(H, W))
-
-        # move to CPU/NumPy and ensure a channel dimension
-        x_np    = x.squeeze(0).cpu().numpy()
-        xhat_np = x_hat.squeeze(0).cpu().numpy()
-        if x_np.ndim == 2:
-            x_np    = x_np[np.newaxis, ...]
-            xhat_np = xhat_np[np.newaxis, ...]
-
-        class_str = "real" if lbl == 0 else "fake"
-        print(f"[DEBUG] sample {i:2d}  label={lbl} ({class_str})  cluster k={k_idx}")
-
-        # plot real vs. recon for each channel
-        n_ch = x_np.shape[0]
-        fig, axes = plt.subplots(2, n_ch, figsize=(4*n_ch, 6))
+        # Plot original and all reconstructions
+        n_ch = x.shape[1]
+        fig, axes = plt.subplots(n_clusters + 1, n_ch, 
+                                figsize=(4*n_ch, 3*(n_clusters + 1)))
         if n_ch == 1:
-            axes = axes.reshape(2, 1)
+            axes = axes.reshape(-1, 1)
+
+        # Original sample
+        x_np = x.squeeze(0).cpu().numpy()
         for c in range(n_ch):
             axes[0, c].imshow(x_np[c], aspect="auto", origin="lower")
-            axes[0, c].set_title(f"Real   (ch={c})")
+            axes[0, c].set_title(f"Original (ch={c})")
             axes[0, c].axis("off")
 
-            axes[1, c].imshow(xhat_np[c], aspect="auto", origin="lower")
-            axes[1, c].set_title(f"Recon  (ch={c})\nk={k_idx}")
-            axes[1, c].axis("off")
+        # All reconstructions
+        for k in range(n_clusters):
+            for c in range(n_ch):
+                axes[k+1, c].imshow(reconstructions[k][0, c], aspect="auto", origin="lower")
+                color = "red" if k == k_pred else "black"
+                axes[k+1, c].set_title(f"Gen {k} (err={errors[k]:.2f})", color=color)
+                axes[k+1, c].axis("off")
 
-        plt.suptitle(f"Sample {i}  class={class_str}  true={lbl}")
-        plt.tight_layout(rect=[0,0,1,0.95])
-        plt.savefig(os.path.join(debug_dir, f"sample_{i:02d}_class_{class_str}.png"))
+        class_str = "real" if lbl == 0 else "fake"
+        plt.suptitle(f"Sample {i} (class={class_str}, pred_cluster={k_pred})")
+        plt.tight_layout(rect=[0, 0, 1, 0.95])
+        plt.savefig(os.path.join(debug_dir, f"sample_{i:02d}_all_generators.png"))
         plt.close(fig)
 
-    print("[DEBUG] Finished visualizing first 5 real and first 5 fake samples.")
+    print("[DEBUG] Finished visualizing reconstructions from all generators")
 
     all_scores = []
     all_labels = []
@@ -258,6 +258,19 @@ def inference(args):
 
     scores = np.concatenate(all_scores)
     labels = np.concatenate(all_labels)
+
+    # Plot distribution of anomaly scores
+    plt.figure(figsize=(10, 6))
+    plt.hist(scores[labels == 0], bins=50, alpha=0.5, label='Real', color='blue', density=True)
+    plt.hist(scores[labels == 1], bins=50, alpha=0.5, label='Fake', color='red', density=True)
+    plt.xlabel('Anomaly Score')
+    plt.ylabel('Density')
+    plt.title('Distribution of Anomaly Scores')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(args.out_dir, "score_distribution.png"))
+    plt.close()
 
     # ROC & AUC
     fpr, tpr, thr = roc_curve(labels, scores)
@@ -328,7 +341,7 @@ def inference(args):
     os.makedirs(args.out_dir, exist_ok=True)
     df.to_csv(os.path.join(args.out_dir, "metrics_vs_threshold.csv"), index=False)
 
-    # best threshold by F1
+    # best threshold by F1 (remove duplicate calculation)
     best = df.iloc[df["f1"].idxmax()]
     best_t = best.threshold
     best_pred = (scores >= best_t).astype(int)
@@ -371,9 +384,9 @@ if __name__ == "__main__":
     p.add_argument("--xzx_encoder", default=None,
                help="Path to encoder fine-tuned in phase 2 (E_xzx_final.pt)")
 
-    p.add_argument("--out_dir",       default="inference_report")
+    p.add_argument("--out_dir",       default="1000_500_ff")
     p.add_argument("--batch_size",    type=int,   default=64)
-    p.add_argument("--n_samples",     type=int,   default=None,
+    p.add_argument("--n_samples",     type=int,   default=3000,
                    help="Max samples per class (real/fake)")
     p.add_argument("--seed",          type=int,   default=0)
     p.add_argument("--z_dim",         type=int,   default=128)
