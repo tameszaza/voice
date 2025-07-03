@@ -5,7 +5,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
-from torch.utils.tensorboard import SummaryWriter
+# from torch.utils.tensorboard import SummaryWriter
+from tensorboardX import SummaryWriter
+
 
 from models import MultiGenerator, MultiEncoder, Discriminator, Classifier
 
@@ -17,6 +19,12 @@ def save_all_models(G, E, D, C, log_dir, suffix):
     torch.save(E.state_dict(), os.path.join(log_dir, f"E_{suffix}.pt"))
     torch.save(D.state_dict(), os.path.join(log_dir, f"D_{suffix}.pt"))
     torch.save(C.state_dict(), os.path.join(log_dir, f"C_{suffix}.pt"))
+
+def load_saved_models(G, E, D, C, weights_dir, epoch):
+    G.load_state_dict(torch.load(os.path.join(weights_dir, f"G_{epoch}.pt")))
+    E.load_state_dict(torch.load(os.path.join(weights_dir, f"E_{epoch}.pt")))
+    D.load_state_dict(torch.load(os.path.join(weights_dir, f"D_{epoch}.pt")))
+    C.load_state_dict(torch.load(os.path.join(weights_dir, f"C_{epoch}.pt")))
 
 # -----------------------------------------------------------------------------
 #  Dataset: each subfolder under data_root is a class.
@@ -87,6 +95,24 @@ def save_config(args, n_features):
         for k, v in vars(args).items():
             f.write(f"{k}: {v}\n")
 
+def load_config(config_path):
+    config = {}
+    with open(config_path, 'r') as f:
+        for line in f:
+            if ':' in line:
+                key, value = line.strip().split(':', 1)
+                key = key.strip()
+                value = value.strip()
+                # Convert string values to appropriate types
+                if value.lower() == 'true':
+                    value = True
+                elif value.lower() == 'false':
+                    value = False
+                elif value.replace('.','',1).isdigit():
+                    value = float(value) if '.' in value else int(value)
+                config[key] = value
+    return config
+
 # -----------------------------------------------------------------------------
 #  WGAN-GP gradient penalty
 # -----------------------------------------------------------------------------
@@ -107,6 +133,16 @@ def gradient_penalty(D, real, fake, device):
 # -----------------------------------------------------------------------------
 def train(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    # Load config if resuming
+    start_epoch = 0
+    if args.resume:
+        config = load_config(os.path.join(args.resume, 'configuration.txt'))
+        args.z_dim = config.get('z_dim', args.z_dim)
+        args.n_clusters = config.get('n_clusters', args.n_clusters)
+        args.use_mel = config.get('use_mel', args.use_mel)
+        args.use_mfcc = config.get('use_mfcc', args.use_mfcc)
+        start_epoch = config.get('resume_epoch', 0)
 
     # dataset & loader
     ds = MultiFeatureDirectoryDataset(
@@ -152,8 +188,14 @@ def train(args):
     d_steps = 0
     global_step = 0
 
+    # Load saved weights if resuming
+    if args.resume:
+        print(f"Resuming from epoch {start_epoch}")
+        load_saved_models(G, E, D, C, args.resume, start_epoch)
+
+    # Training loop
     try:
-        for epoch in range(args.epochs):
+        for epoch in range(start_epoch, args.epochs):
             for real, k in loader:
                 real, k = real.to(device), k.to(device)
                 z = torch.randn(args.batch_size, args.z_dim, device=device)
@@ -224,8 +266,8 @@ if __name__ == "__main__":
     p.add_argument("--data_root",  required=True,
                    help="Root folder (e.g. data_40) with class subfolders")
     p.add_argument("--log_dir",    required=True)
-    p.add_argument("--batch_size", type=int,   default=64)
-    p.add_argument("--epochs",     type=int,   default=20000)
+    p.add_argument("--batch_size", type=int,   default=8)
+    p.add_argument("--epochs",     type=int,   default=2000)
     p.add_argument("--z_dim",      type=int,   default=128)
     p.add_argument("--n_clusters", type=int,   default=7)
     p.add_argument("--n_critic",   type=int,   default=5)
@@ -236,7 +278,13 @@ if __name__ == "__main__":
                    help="Include mel channel")
     p.add_argument("--use_mfcc",   action="store_true",
                    help="Include mfcc channel")
+    p.add_argument("--resume", type=str, 
+                   help="Path to directory containing saved models and configuration.txt")
     args = p.parse_args()
 
-    os.makedirs(args.log_dir, exist_ok=True)
+    if args.resume:
+        args.log_dir = args.resume
+    else:
+        os.makedirs(args.log_dir, exist_ok=True)
+    
     train(args)

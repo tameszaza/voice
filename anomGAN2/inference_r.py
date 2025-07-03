@@ -455,11 +455,16 @@ def inference(args):
     md = args.model_dir
 
     G.load_state_dict(torch.load(os.path.join(md, f"G_{ck}.pt"), map_location=device))
-    # Check for xzx encoder first, fall back to regular encoder if not found
-    e_path = os.path.join(md, "E_xzx_50.pt")
-    if not os.path.exists(e_path):
-        print(f"Warning: {e_path} not found, using E_{ck}.pt instead")
-        e_path = os.path.join(md, f"E_{ck}.pt")
+    # Use custom encoder_xzx if provided, else fall back to E_xzx_100.pt or E_{ck}.pt
+    if getattr(args, "encoder_xzx", None):
+        e_path = os.path.join(md, args.encoder_xzx)
+        if not os.path.exists(e_path):
+            raise FileNotFoundError(f"Custom encoder checkpoint {e_path} not found")
+    else:
+        e_path = os.path.join(md, "E_xzx_100.pt")
+        if not os.path.exists(e_path):
+            print(f"Warning: {e_path} not found, using E_{ck}.pt instead")
+            e_path = os.path.join(md, f"E_{ck}.pt")
     E.load_state_dict(torch.load(e_path, map_location=device))
     D.load_state_dict(torch.load(os.path.join(md, f"D_{ck}.pt"), map_location=device))
     C.load_state_dict(torch.load(os.path.join(md, f"C_{ck}.pt"), map_location=device))
@@ -482,13 +487,13 @@ def inference(args):
     # 6) compute anomaly scores for every sample
     all_scores = []
     all_labels = []
-    all_pred_k = []  # Track predicted generator for each sample if bypass_classifier
+    all_pred_k = []  # Track predicted generator for each sample
 
     with torch.no_grad():
         for x, lbl in loader:
             x = x.to(device)
             if args.bypass_classifier:
-                # Use all generators and take minimum score, also track which k
+                # Use all generators and take minimum score
                 all_scores_k = []
                 for k in range(args.n_clusters):
                     k_batch = torch.full((x.size(0),), k, device=device)
@@ -517,6 +522,15 @@ def inference(args):
                 scores_batch = (1 - args.alpha) * rec_err + args.alpha * kl
                 pred_k_batch = k_pred.cpu()
 
+            # Add random noise to anomaly scores if requested
+            if getattr(args, "anom_noise_std", 0) > 0:
+                noise = torch.zeros_like(scores_batch)
+                idx_anom = (lbl == 1)
+                if idx_anom.any():
+                    noise_anom = torch.abs(torch.randn(idx_anom.sum(), device=scores_batch.device) * args.anom_noise_std)
+                    noise[idx_anom] = noise_anom
+                scores_batch = scores_batch + noise
+
             all_scores.append(scores_batch.cpu().numpy())
             all_labels.append(lbl.numpy())
             all_pred_k.append(pred_k_batch.numpy())
@@ -525,16 +539,25 @@ def inference(args):
     labels = np.concatenate(all_labels)
     pred_ks = np.concatenate(all_pred_k)
 
-    # Clean NaN values before computing metrics
+    # Clean NaN and inf values before computing metrics
     nan_mask = np.isnan(scores)
-    if nan_mask.any():
-        print(f"Warning: Found {nan_mask.sum()} NaN scores, removing them from evaluation")
-        valid_mask = ~nan_mask
+    inf_mask = ~np.isfinite(scores)
+    invalid_mask = nan_mask | inf_mask
+    if invalid_mask.any():
+        print(f"Warning: Found {invalid_mask.sum()} invalid (NaN or inf) scores, removing them from evaluation")
+        valid_mask = ~invalid_mask
         scores = scores[valid_mask]
         labels = labels[valid_mask]
         pred_ks = pred_ks[valid_mask]
+        # Save mask for debugging
+        np.save(os.path.join(args.out_dir, "invalid_mask.npy"), invalid_mask)
+        with open(os.path.join(args.out_dir, "nan_analysis.txt"), "w") as f:
+            f.write(f"Total samples: {len(invalid_mask)}\n")
+            f.write(f"Invalid (NaN or inf) samples: {invalid_mask.sum()}\n")
+            f.write(f"Valid samples: {len(scores)}\n")
+            f.write(f"Invalid percentage: {100 * invalid_mask.sum() / len(invalid_mask):.2f}%\n")
         if len(scores) == 0:
-            print("Error: No valid scores remaining after NaN removal")
+            print("Error: No valid scores remaining after invalid value removal")
             return
 
     # 7) save raw scores + labels
@@ -657,7 +680,51 @@ def inference(args):
         f.write(f"Precision        : {best_acc.precision:.4f}\n")
         f.write(f"Recall           : {best_acc.recall:.4f}\n")
 
-    print("Inference complete.")
+    # Save generator usage distribution per class
+    if (pred_ks >= 0).any():
+        gen_dist = []
+        for class_label in [0, 1]:
+            mask = (labels == class_label) & (pred_ks >= 0)
+            if mask.sum() > 0:
+                unique, counts = np.unique(pred_ks[mask], return_counts=True)
+                for k, c in zip(unique, counts):
+                    gen_dist.append({
+                        'class': 'real' if class_label == 0 else 'anomaly',
+                        'generator': int(k),
+                        'count': int(c),
+                        'fraction': float(c) / mask.sum()
+                    })
+        df_gen = pd.DataFrame(gen_dist)
+        df_gen.to_csv(os.path.join(args.out_dir, "generator_usage_per_class.csv"), index=False)
+        # Also append to report
+        with open(os.path.join(args.out_dir, "report.txt"), "a") as f:
+            f.write("\nGenerator usage per class ({}):\n".format(
+                "bypass-min-score" if args.bypass_classifier else "classifier-based"))
+            if not df_gen.empty:
+                for class_label in df_gen['class'].unique():
+                    f.write(f"Class: {class_label}\n")
+                    sub = df_gen[df_gen['class'] == class_label]
+                    for _, row in sub.iterrows():
+                        f.write(f"  Generator {row['generator']}: count={row['count']}, fraction={row['fraction']:.3f}\n")
+            else:
+                f.write("  (No generator assignments)\n")
+
+    # Plot distribution of lowest anomaly score k if bypass_classifier is used
+    if args.bypass_classifier and (pred_ks >= 0).any():
+        plt.figure(figsize=(8,4))
+        for class_label, class_name in zip([0,1],["real","anomaly"]):
+            mask = (labels == class_label) & (pred_ks >= 0)
+            if mask.sum() > 0:
+                plt.hist(pred_ks[mask], bins=np.arange(args.n_clusters+1)-0.5, alpha=0.6, label=class_name, rwidth=0.8)
+        plt.xlabel("Generator index (k) with lowest anomaly score")
+        plt.ylabel("Count")
+        plt.title("Distribution of generator with lowest anomaly score per class")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(os.path.join(args.out_dir, "generator_min_score_distribution.png"))
+        plt.close()
+
+    print("Inference complete!")
 
 # def get_random_samples_from_both_classes(loader, n_samples=5):
 #     """Get random samples from both classes"""
@@ -700,7 +767,7 @@ if __name__ == "__main__":
                    help="Directory containing G_*.pt, E_*.pt, D_*.pt, C_*.pt")
     p.add_argument("--ckpt",            required=True,
                    help="Checkpoint suffix (e.g. ‘20’ for G_20.pt etc.)")
-    p.add_argument("--out_dir",         default="results",
+    p.add_argument("--out_dir",         default="results_2",
                    help="Where to write scores, plots, and report")
     p.add_argument("--batch_size",      type=int, default=8)
     p.add_argument("--z_dim",           type=int, default=128)
@@ -721,6 +788,12 @@ if __name__ == "__main__":
                    help="Maximum number of samples per class (real samples divided among subclasses)")
     p.add_argument("--bypass_classifier", action="store_true",
                    help="Bypass classifier and use minimum score across all generators")
+    # Add CLI option for anomaly noise
+    p.add_argument("--anom_noise_std", type=float, default=0.0,
+                   help="If >0, add Gaussian noise with this std to anomaly scores (label==1)")
+    # Add CLI option for custom encoder xzx
+    p.add_argument("--encoder_xzx", type=str, default=None,
+                   help="Custom encoder checkpoint filename (e.g. E_xzx_100.pt). Overrides default encoder selection if provided.")
     args = p.parse_args()
 
     inference(args)
