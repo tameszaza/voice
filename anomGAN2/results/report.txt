@@ -1,6 +1,0 @@
-AUC          : 0.5042
-Best F1      : 0.6670
-Thresh @ Best: 1.2688
-Accuracy     : 0.5003
-Precision    : 0.5003
-Recall       : 1.0000

@@ -724,6 +724,14 @@ def inference(args):
         plt.savefig(os.path.join(args.out_dir, "generator_min_score_distribution.png"))
         plt.close()
 
+    # --- Compute and report average anomaly score for real class ---
+    avg_real_score = float(np.mean(scores[labels == 0])) if np.any(labels == 0) else float('nan')
+    print(f"Average anomaly score on real class: {avg_real_score:.6f}")
+
+    # --- Write to report.txt ---
+    with open(os.path.join(args.out_dir, "report.txt"), "a") as f:
+        f.write(f"\nAverage anomaly score on real class: {avg_real_score:.6f}\n")
+
     print("Inference complete!")
 
 # def get_random_samples_from_both_classes(loader, n_samples=5):

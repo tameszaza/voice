@@ -40,6 +40,24 @@ def find_encoder_checkpoints(model_dir, prefix="E_xzx_", suffix=".pt"):
         files = sorted(files)
     return files
 
+def get_avg_real_score(out_dir):
+    """Load scores and labels from out_dir and return mean anomaly score for real class (label==0)"""
+    try:
+        scores = np.load(os.path.join(out_dir, "scores.npy"))
+        labels = np.load(os.path.join(out_dir, "labels.npy"))
+        real_scores = scores[labels == 0]
+        if len(real_scores) == 0:
+            return float('nan')
+        return float(np.mean(real_scores))
+    except Exception as e:
+        print(f"Could not compute avg real score in {out_dir}: {e}")
+        return float('nan')
+
+def result_files_exist(out_dir):
+    """Check if the main result files exist in out_dir"""
+    required = ["scores.npy", "labels.npy", "report.txt"]
+    return all(os.path.exists(os.path.join(out_dir, f)) for f in required)
+
 def main():
     parser = argparse.ArgumentParser(
         description="Automate inference over all checkpoints and report best AUC"
@@ -90,13 +108,24 @@ def main():
         best_auc = -1
         best_encoder = None
         best_out_dir = None
+        lowest_real_score = float('inf')
+        lowest_real_encoder = None
+        lowest_real_out_dir = None
 
         for encoder_ckpt in encoder_ckpts:
             encoder_name = os.path.splitext(encoder_ckpt)[0]
             out_dir_ck = os.path.join(args.out_dir, f"encoder_{encoder_name}")
+
+            skip = False
             if os.path.exists(out_dir_ck):
-                print(f"Skipping encoder {encoder_ckpt} (results already exist at {out_dir_ck})")
-                # Try to read AUC from report.txt if present
+                if result_files_exist(out_dir_ck):
+                    print(f"Skipping encoder {encoder_ckpt} (results already exist at {out_dir_ck})")
+                    skip = True
+                else:
+                    print(f"Results folder {out_dir_ck} exists but result files are missing, rerunning inference.")
+
+            if skip:
+                # Try to read AUC and avg real score from report.txt and .npy
                 report_path = os.path.join(out_dir_ck, "report.txt")
                 auc = None
                 if os.path.exists(report_path):
@@ -108,15 +137,17 @@ def main():
                                 except Exception:
                                     pass
                                 break
-                if auc is not None:
-                    results.append({"encoder": encoder_ckpt, "auc": auc, "out_dir": out_dir_ck})
-                    print(f"Encoder {encoder_ckpt}: AUC={auc:.4f}")
-                    if auc > best_auc:
-                        best_auc = auc
-                        best_encoder = encoder_ckpt
-                        best_out_dir = out_dir_ck
-                else:
-                    print(f"Could not find AUC in {report_path}")
+                avg_real_score = get_avg_real_score(out_dir_ck)
+                results.append({"encoder": encoder_ckpt, "auc": auc, "out_dir": out_dir_ck, "avg_real_score": avg_real_score})
+                print(f"Encoder {encoder_ckpt}: AUC={auc if auc is not None else 'N/A'}, AvgRealScore={avg_real_score:.6f}")
+                if auc is not None and auc > best_auc:
+                    best_auc = auc
+                    best_encoder = encoder_ckpt
+                    best_out_dir = out_dir_ck
+                if avg_real_score < lowest_real_score:
+                    lowest_real_score = avg_real_score
+                    lowest_real_encoder = encoder_ckpt
+                    lowest_real_out_dir = out_dir_ck
                 continue
 
             print(f"\n=== Evaluating encoder: {encoder_ckpt} ===")
@@ -145,15 +176,17 @@ def main():
                             except Exception:
                                 pass
                             break
-            if auc is not None:
-                results.append({"encoder": encoder_ckpt, "auc": auc, "out_dir": out_dir_ck})
-                print(f"Encoder {encoder_ckpt}: AUC={auc:.4f}")
-                if auc > best_auc:
-                    best_auc = auc
-                    best_encoder = encoder_ckpt
-                    best_out_dir = out_dir_ck
-            else:
-                print(f"Could not find AUC in {report_path}")
+            avg_real_score = get_avg_real_score(out_dir_ck)
+            results.append({"encoder": encoder_ckpt, "auc": auc, "out_dir": out_dir_ck, "avg_real_score": avg_real_score})
+            print(f"Encoder {encoder_ckpt}: AUC={auc if auc is not None else 'N/A'}, AvgRealScore={avg_real_score:.6f}")
+            if auc is not None and auc > best_auc:
+                best_auc = auc
+                best_encoder = encoder_ckpt
+                best_out_dir = out_dir_ck
+            if avg_real_score < lowest_real_score:
+                lowest_real_score = avg_real_score
+                lowest_real_encoder = encoder_ckpt
+                lowest_real_out_dir = out_dir_ck
 
         # Save summary CSV
         df = pd.DataFrame(results)
@@ -169,10 +202,18 @@ def main():
                 shutil.rmtree(best_dir)
             shutil.copytree(best_out_dir, best_dir)
             print(f"Best encoder results copied to {best_dir}")
-            if not args.keep_all:
-                for r in results:
-                    if r["out_dir"] != best_out_dir:
-                        shutil.rmtree(r["out_dir"], ignore_errors=True)
+        if lowest_real_encoder is not None:
+            print(f"\nLowest avg anomaly score on real class: {lowest_real_score:.6f} (encoder: {lowest_real_encoder})")
+            print(f"Results in: {lowest_real_out_dir}")
+            best_real_dir = os.path.join(args.out_dir, "lowest_real_score_encoder")
+            if os.path.exists(best_real_dir):
+                shutil.rmtree(best_real_dir)
+            shutil.copytree(lowest_real_out_dir, best_real_dir)
+            print(f"Lowest real score encoder results copied to {best_real_dir}")
+        if not args.keep_all:
+            for r in results:
+                if r["out_dir"] != best_out_dir and r["out_dir"] != lowest_real_out_dir:
+                    shutil.rmtree(r["out_dir"], ignore_errors=True)
         else:
             print("No valid AUC found for any encoder checkpoint.")
         return
@@ -187,12 +228,23 @@ def main():
     best_auc = -1
     best_ckpt = None
     best_out_dir = None
+    lowest_real_score = float('inf')
+    lowest_real_ckpt = None
+    lowest_real_out_dir = None
 
     for ck in ckpts:
         out_dir_ck = os.path.join(args.out_dir, f"ckpt_{ck}")
+
+        skip = False
         if os.path.exists(out_dir_ck):
-            print(f"Skipping checkpoint {ck} (results already exist at {out_dir_ck})")
-            # Try to read AUC from report.txt if present
+            if result_files_exist(out_dir_ck):
+                print(f"Skipping checkpoint {ck} (results already exist at {out_dir_ck})")
+                skip = True
+            else:
+                print(f"Results folder {out_dir_ck} exists but result files are missing, rerunning inference.")
+
+        if skip:
+            # Try to read AUC and avg real score from report.txt and .npy
             report_path = os.path.join(out_dir_ck, "report.txt")
             auc = None
             if os.path.exists(report_path):
@@ -204,15 +256,17 @@ def main():
                             except Exception:
                                 pass
                             break
-            if auc is not None:
-                results.append({"ckpt": ck, "auc": auc, "out_dir": out_dir_ck})
-                print(f"Checkpoint {ck}: AUC={auc:.4f}")
-                if auc > best_auc:
-                    best_auc = auc
-                    best_ckpt = ck
-                    best_out_dir = out_dir_ck
-            else:
-                print(f"Could not find AUC in {report_path}")
+            avg_real_score = get_avg_real_score(out_dir_ck)
+            results.append({"ckpt": ck, "auc": auc, "out_dir": out_dir_ck, "avg_real_score": avg_real_score})
+            print(f"Checkpoint {ck}: AUC={auc if auc is not None else 'N/A'}, AvgRealScore={avg_real_score:.6f}")
+            if auc is not None and auc > best_auc:
+                best_auc = auc
+                best_ckpt = ck
+                best_out_dir = out_dir_ck
+            if avg_real_score < lowest_real_score:
+                lowest_real_score = avg_real_score
+                lowest_real_ckpt = ck
+                lowest_real_out_dir = out_dir_ck
             continue
 
         print(f"\n=== Evaluating checkpoint: {ck} ===")
@@ -242,15 +296,17 @@ def main():
                         except Exception:
                             pass
                         break
-        if auc is not None:
-            results.append({"ckpt": ck, "auc": auc, "out_dir": out_dir_ck})
-            print(f"Checkpoint {ck}: AUC={auc:.4f}")
-            if auc > best_auc:
-                best_auc = auc
-                best_ckpt = ck
-                best_out_dir = out_dir_ck
-        else:
-            print(f"Could not find AUC in {report_path}")
+        avg_real_score = get_avg_real_score(out_dir_ck)
+        results.append({"ckpt": ck, "auc": auc, "out_dir": out_dir_ck, "avg_real_score": avg_real_score})
+        print(f"Checkpoint {ck}: AUC={auc if auc is not None else 'N/A'}, AvgRealScore={avg_real_score:.6f}")
+        if auc is not None and auc > best_auc:
+            best_auc = auc
+            best_ckpt = ck
+            best_out_dir = out_dir_ck
+        if avg_real_score < lowest_real_score:
+            lowest_real_score = avg_real_score
+            lowest_real_ckpt = ck
+            lowest_real_out_dir = out_dir_ck
 
     # Save summary CSV
     df = pd.DataFrame(results)
@@ -267,11 +323,19 @@ def main():
             shutil.rmtree(best_dir)
         shutil.copytree(best_out_dir, best_dir)
         print(f"Best checkpoint results copied to {best_dir}")
-        # Optionally, remove other result folders
-        if not args.keep_all:
-            for r in results:
-                if r["out_dir"] != best_out_dir:
-                    shutil.rmtree(r["out_dir"], ignore_errors=True)
+    if lowest_real_ckpt is not None:
+        print(f"\nLowest avg anomaly score on real class: {lowest_real_score:.6f} (ckpt: {lowest_real_ckpt})")
+        print(f"Results in: {lowest_real_out_dir}")
+        best_real_dir = os.path.join(args.out_dir, "lowest_real_score_ckpt")
+        if os.path.exists(best_real_dir):
+            shutil.rmtree(best_real_dir)
+        shutil.copytree(lowest_real_out_dir, best_real_dir)
+        print(f"Lowest real score checkpoint results copied to {best_real_dir}")
+    # Optionally, remove other result folders
+    if not args.keep_all:
+        for r in results:
+            if r["out_dir"] != best_out_dir and r["out_dir"] != lowest_real_out_dir:
+                shutil.rmtree(r["out_dir"], ignore_errors=True)
     else:
         print("No valid AUC found for any checkpoint.")
 

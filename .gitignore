@@ -21,3 +21,9 @@ __pycache__/
 ASVspoof*
 log*
 *.zip
+ResData/
+results*
+results/
+output*
+*.npy
+*.npz
