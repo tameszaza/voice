@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
 # local imports -----------------------------------------------------------------
-from data import AggregatedLogMelDataset, LogMelDataset  # your dataset file
+from ddata import AggregatedLogMelDataset, LogMelDataset  # your dataset file
 from model import Ganomaly                                # created earlier
 
 
@@ -37,7 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ---------- data ----------
     g_data = p.add_argument_group("data")
-    g_data.add_argument("--data_file", type=str, default="ResData/wavefake128_2048split/train/fake",
+    g_data.add_argument("--data_file", type=str, default="wavefake128_2048split/train/fake",
                         help="aggregated (N,C,H,W) .npy or dir of such")
     g_data.add_argument("--data_root", type=str, default=None,
                         help="folder of individual (C,H,W) .npy files")
