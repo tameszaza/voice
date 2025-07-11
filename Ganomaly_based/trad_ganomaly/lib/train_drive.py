@@ -13,7 +13,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 # local imports -----------------------------------------------------------------
 from ddata import AggregatedLogMelDataset, LogMelDataset  # your dataset file
-from model import Ganomaly                                # created earlier
+from model_drive import Ganomaly                                # created earlier
 
 
 #!/usr/bin/env python
@@ -67,7 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ---------- misc ----------
     g_misc = p.add_argument_group("misc")
-    g_misc.add_argument("--outf",   type=str, default="output_tradgan_tuned/",
+    g_misc.add_argument("--outf",   type=str, default="output_tradgan_from_local/",
                         help="root for logs/ckpts")
     g_misc.add_argument("--name",   type=str, default="128singleFakeWavefake")
     g_misc.add_argument("--device", type=str, default="cuda:0")

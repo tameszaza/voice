@@ -20,6 +20,8 @@ import torch
 from torch import nn, optim
 from torch.utils.tensorboard import SummaryWriter
 
+import io
+
 # ─────────────────────────────────────────────────────────────────────────────
 # helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -60,6 +62,7 @@ class BaseModel:
         self.dataloaders = dataloaders  # {"train": [loader]}
         self.total_steps = 0
         self.epoch = 1
+        self.remote_name = "Depression" 
 
         tb_dir = Path(opt.outf) / opt.name / "tensorboard" / "dec1"
         tb_dir.mkdir(parents=True, exist_ok=True)
@@ -69,17 +72,6 @@ class BaseModel:
         self.ckpt_dir.mkdir(parents=True, exist_ok=True)
 
     # checkpoint helpers -------------------------------------------------
-    
-    def _upload_to_drive(self, local_path: Path, remote_dir: str = "Depression:checkpoints"):
-        """
-        Upload `local_path` to the specified rclone remote directory.
-        """
-        subprocess.run([
-            "rclone", "copy",
-            str(local_path),
-            remote_dir
-        ], check=True)
-        print(f"[✓] uploaded → {remote_dir}/{local_path.name}")
 
     def _optim_state_to(self, device: str):
         """Move optimiser state tensors to given device in-place."""
@@ -88,40 +80,60 @@ class BaseModel:
                 for k, v in st.items():
                     if torch.is_tensor(v):
                         st[k] = v.to(device)
+    def _stream_to_drive(self, obj: Dict[str, Any], filename: str):
+        """
+        Serialize `obj` in-memory and stream it into
+        Depression:<opt.outf>/<opt.name>/checkpoints/<filename>
+        via `rclone rcat`.
+        """
+        # 1) serialize
+        print("enter fn")
+        buf = io.BytesIO()
+        torch.save(obj, buf)
+        buf.seek(0)
+
+        # 2) build the remote path
+        #    e.g. "Depression:output_tradgan_from_local/128singleFakeWavefake/checkpoints"
+        remote_subdir = Path(self.opt.outf).joinpath(self.opt.name, "checkpoints")
+        # strip leading "./" if any, ensure posix style
+        rel = remote_subdir.as_posix().lstrip("./")
+        remote_path = f"{self.remote_name}:{rel}/{filename}"
+        # 3) stream it up
+        subprocess.run(
+            ["rclone", "rcat", remote_path],
+            input=buf.getvalue(),
+            check=True
+        )
+        print(f"[✓] streamed → {remote_path}")
 
     def save(self, tag: str):
-        """Full ckpt (nets + opts).  Leaves live tensors on original device."""
-        p = self.ckpt_dir / f"{tag}.pth"
-        # move → CPU, save, move back
+        """Full ckpt (nets + opts), streamed directly to Drive."""
+        # move → CPU, package dict, move back
         self._optim_state_to("cpu")
-        _atomic_save(
-            {
-                "epoch": self.epoch,
-                "iter": self.total_steps,
-                "netg": self.netg.state_dict(),
-                "netd": self.netd.state_dict(),
-                "opt_g": self.opt_g.state_dict(),
-                "opt_d": self.opt_d.state_dict(),
-                "opt": vars(self.opt),
-            },
-            p,
-        )
+        obj = {
+            "epoch": self.epoch,
+            "iter": self.total_steps,
+            "netg": self.netg.state_dict(),
+            "netd": self.netd.state_dict(),
+            "opt_g": self.opt_g.state_dict(),
+            "opt_d": self.opt_d.state_dict(),
+            "opt": vars(self.opt),
+        }
         self._optim_state_to(self.device.type)
-        print(f"[✓] full checkpoint → {p}")
+
+        filename = f"{tag}.pth"
+        self._stream_to_drive(obj, filename)
 
     def save_light(self, tag: str):
-        """Light ckpt (just weights, no optimiser)."""
-        p = self.ckpt_dir / f"{tag}_light.pth"
-        _atomic_save(
-            {
-                "epoch": self.epoch,
-                "iter": self.total_steps,
-                "netg": self.netg.state_dict(),
-                "netd": self.netd.state_dict(),
-            },
-            p,
-        )
-        print(f"[✓] light checkpoint → {p}")
+        """Light ckpt (just weights), streamed directly to Drive."""
+        obj = {
+            "epoch": self.epoch,
+            "iter": self.total_steps,
+            "netg": self.netg.state_dict(),
+            "netd": self.netd.state_dict(),
+        }
+        filename = f"{tag}_light.pth"
+        self._stream_to_drive(obj, filename)
 
     def load(self, path: str | Path, strict: bool = True):
         """Resume training or eval from <path>."""
