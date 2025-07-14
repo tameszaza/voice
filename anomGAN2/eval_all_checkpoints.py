@@ -66,7 +66,7 @@ def main():
     parser.add_argument("--real_data_root",  required=True)
     parser.add_argument("--anomaly_data_dir",required=True)
     parser.add_argument("--model_dir",       required=True)
-    parser.add_argument("--batch_size",      type=int, default=32)
+    parser.add_argument("--batch_size",      type=int, default=256)
     parser.add_argument("--z_dim",           type=int, default=128)
     parser.add_argument("--n_clusters",      type=int, default=7)
     parser.add_argument("--base_channels",   type=int, default=32)
@@ -76,9 +76,11 @@ def main():
     parser.add_argument("--use_mel",         action="store_true")
     parser.add_argument("--use_mfcc",        action="store_true")
     parser.add_argument("--device",          default="cuda")
-    parser.add_argument("--max_samples_per_class", type=int, default=3000)
+    parser.add_argument("--max_samples_per_class", type=int, default=100000)
     parser.add_argument("--bypass_classifier", action="store_true")
     parser.add_argument("--anom_noise_std", type=float, default=0.0)
+    parser.add_argument("--anom_score_add", type=float, default=0.0,
+                        help="If >0, add this scalar to anomaly scores for anomaly class; if <0, add |value| to real class")
     parser.add_argument("--out_dir", default="results_eval_all")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--keep_all", action="store_true", help="Keep all result folders (default: only best)")
@@ -92,6 +94,22 @@ def main():
     args = parser.parse_args()
 
     set_seed(args.seed)
+
+    # --- Build and cache the dataset ONCE ---
+    from inference_r import RealFakeDirDataset
+    from torch.utils.data import DataLoader
+
+    print("Building and caching dataset in RAM (once for all checkpoints)...")
+    ds = RealFakeDirDataset(
+        args.real_data_root,
+        args.anomaly_data_dir,
+        args.use_mel,
+        args.use_mfcc,
+        args.max_samples_per_class,
+        cache_in_ram=True
+    )
+    loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False)
+    print("Dataset ready.")
 
     if args.compare_mode:
         # Check that --ckpt is provided
@@ -157,9 +175,10 @@ def main():
             args_ck.ckpt = args.ckpt
             args_ck.out_dir = out_dir_ck
             args_ck.encoder_xzx = encoder_ckpt
+            args_ck.cache_in_ram = True  # Always cache in RAM for speed
 
             try:
-                inference(args_ck)
+                inference(args_ck, ds=ds, loader=loader)
             except Exception as e:
                 print(f"Error running inference for encoder {encoder_ckpt}: {e}")
                 continue
@@ -277,9 +296,10 @@ def main():
         args_ck = argparse.Namespace(**vars(args))
         args_ck.ckpt = ck
         args_ck.out_dir = out_dir_ck
+        args_ck.cache_in_ram = True  # Always cache in RAM for speed
 
         try:
-            inference(args_ck)
+            inference(args_ck, ds=ds, loader=loader)
         except Exception as e:
             print(f"Error running inference for checkpoint {ck}: {e}")
             continue

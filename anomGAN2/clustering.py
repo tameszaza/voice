@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Cluster two separate sets of .npy samples (mel and mfcc) into balanced groups,
-then copy each file into clusters/cluster{0..K}/[mel|mfcc] folders.
+then copy each file into output_root/cluster{0..K}/[mel|mfcc] folders.
 
 Usage:
     python cluster_mel_mfcc.py
@@ -22,29 +22,21 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 for 3d scatter
 
 
 def balanced_kmeans(X: np.ndarray, n_clusters: int, random_state=42) -> np.ndarray:
-    """
-    Perform KMeans but force each cluster to have nearly the same number of points.
-    Returns an array of labels (shape N,).
-    """
     N, _ = X.shape
     km = KMeans(n_clusters=n_clusters, random_state=random_state).fit(X)
     centers = km.cluster_centers_
-    # compute distance of every point to every center
     dists = np.linalg.norm(X[:, None, :] - centers[None, :, :], axis=2)
 
     base = N // n_clusters
     rem  = N % n_clusters
-    # how many samples each cluster should get
     desired = np.array([base + 1] * rem + [base] * (n_clusters - rem))
 
     labels = -1 * np.ones(N, dtype=int)
     counts = np.zeros(n_clusters, dtype=int)
 
-    # sort all (point,cluster) pairs by distance ascending
     pairs = [(dists[i, j], i, j) for i in range(N) for j in range(n_clusters)]
     pairs.sort(key=lambda x: x[0])
 
-    # assign each point to its nearest cluster that still has room
     for dist, i, j in pairs:
         if labels[i] != -1:
             continue
@@ -58,10 +50,6 @@ def balanced_kmeans(X: np.ndarray, n_clusters: int, random_state=42) -> np.ndarr
 
 
 class NpyFileDataset(Dataset):
-    """
-    Treat each .npy file in a folder as one sample.
-    Returns (array, filepath).
-    """
     def __init__(self, dir_path):
         self.files = sorted(glob.glob(os.path.join(dir_path, '*.npy')))
         if not self.files:
@@ -77,20 +65,12 @@ class NpyFileDataset(Dataset):
 
 
 def collate_fn(batch):
-    """
-    Batch is list of (array, path). Stack arrays into one big numpy array
-    and collect paths in a list.
-    """
     arrays, paths = zip(*batch)
     big = np.stack(arrays, axis=0)
     return big, list(paths)
 
 
 def cluster_folder(input_dir, n_clusters):
-    """
-    Load all .npy from input_dir, flatten them, run balanced_kmeans,
-    and return (labels, list_of_paths, flattened_data) for plotting.
-    """
     ds     = NpyFileDataset(input_dir)
     loader = DataLoader(
         ds,
@@ -98,22 +78,19 @@ def cluster_folder(input_dir, n_clusters):
         shuffle    = False,
         collate_fn = collate_fn
     )
-    X_all, paths = next(iter(loader))  # X_all shape (N,...)
+    X_all, paths = next(iter(loader))
     N = X_all.shape[0]
-    # flatten to (N, D)
-    if X_all.ndim > 2:
-        X_flat = X_all.reshape(N, -1)
-    else:
-        X_flat = X_all
+    X_flat = X_all.reshape(N, -1) if X_all.ndim > 2 else X_all
     labels = balanced_kmeans(X_flat, n_clusters)
     return labels, paths, X_flat
 
 
 def main():
     # ------------ USER CONFIGURATION ------------
-    mel_dir  = 'data/real/data_256_real/mel'
-    mfcc_dir = 'data/real/data_256_real/mfcc'
-    n_clusters = 8
+    mel_dir     = '../data/real/data_64/all/mel'
+    mfcc_dir    = '../data/real/data_64/all/mfcc'
+    n_clusters  = 7
+    output_root = '../data/real/clusters_64'
     # --------------------------------------------
 
     # cluster both folders
@@ -140,8 +117,8 @@ def main():
     # prepare output directories
     os.makedirs('plots', exist_ok=True)
     for k in range(n_clusters):
-        os.makedirs(f'clusters/cluster_{k}/mel',  exist_ok=True)
-        os.makedirs(f'clusters/cluster_{k}/mfcc', exist_ok=True)
+        os.makedirs(os.path.join(output_root, f'cluster_{k}', 'mel'),  exist_ok=True)
+        os.makedirs(os.path.join(output_root, f'cluster_{k}', 'mfcc'), exist_ok=True)
 
     # 1) bar charts
     plt.figure(figsize=(8,4))
@@ -160,10 +137,8 @@ def main():
     mel3   = pca_mel.fit_transform(X_mel)
     fig = plt.figure(figsize=(8,6))
     ax  = fig.add_subplot(111, projection='3d')
-    sc = ax.scatter(
-        mel3[:,0], mel3[:,1], mel3[:,2],
-        c=labels_mel, cmap='tab10', s=15, alpha=0.6
-    )
+    sc = ax.scatter(mel3[:,0], mel3[:,1], mel3[:,2],
+                    c=labels_mel, cmap='tab10', s=15, alpha=0.6)
     cb = fig.colorbar(sc, ax=ax, ticks=range(n_clusters))
     cb.set_label('mel cluster')
     ax.set_title('mel clusters (PCA 3D)')
@@ -177,10 +152,8 @@ def main():
     mf3      = pca_mfcc.fit_transform(X_mfcc)
     fig = plt.figure(figsize=(8,6))
     ax  = fig.add_subplot(111, projection='3d')
-    sc = ax.scatter(
-        mf3[:,0], mf3[:,1], mf3[:,2],
-        c=labels_mfcc, cmap='tab10', s=15, alpha=0.6
-    )
+    sc = ax.scatter(mf3[:,0], mf3[:,1], mf3[:,2],
+                    c=labels_mfcc, cmap='tab10', s=15, alpha=0.6)
     cb = fig.colorbar(sc, ax=ax, ticks=range(n_clusters))
     cb.set_label('mfcc cluster')
     ax.set_title('mfcc clusters (PCA 3D)')
@@ -191,14 +164,15 @@ def main():
 
     # 4) copy files into cluster folders
     for path, lbl in zip(paths_mel, labels_mel):
-        dest = f'clusters/cluster_{lbl}/mel/{os.path.basename(path)}'
+        dest = os.path.join(output_root, f'cluster_{lbl}', 'mel', os.path.basename(path))
         shutil.copy(path, dest)
     for path, lbl in zip(paths_mfcc, labels_mfcc):
-        dest = f'clusters/cluster_{lbl}/mfcc/{os.path.basename(path)}'
+        dest = os.path.join(output_root, f'cluster_{lbl}', 'mfcc', os.path.basename(path))
         shutil.copy(path, dest)
 
-    print("\nAll mel and mfcc files copied into clusters/cluster{k}/[mel|mfcc].")
+    print(f"\nAll mel and mfcc files copied into {output_root}/cluster_*/[mel|mfcc].")
     print("Plots are under plots/")
+
 
 if __name__ == '__main__':
     main()

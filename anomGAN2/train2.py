@@ -14,22 +14,51 @@ from models import MultiGenerator, MultiEncoder, Discriminator, Classifier
 # -----------------------------------------------------------------------------
 #  Save models (no Bandit)
 # -----------------------------------------------------------------------------
-def save_all_models(G, E, D, C, log_dir, suffix):
+def save_all_models(G, E, D, C, log_dir, suffix, opt_D=None, opt_Gs=None, opt_E=None, opt_C=None):
     torch.save(G.state_dict(), os.path.join(log_dir, f"G_{suffix}.pt"))
     torch.save(E.state_dict(), os.path.join(log_dir, f"E_{suffix}.pt"))
     torch.save(D.state_dict(), os.path.join(log_dir, f"D_{suffix}.pt"))
     torch.save(C.state_dict(), os.path.join(log_dir, f"C_{suffix}.pt"))
+    # Save optimizers only if provided (used only for interrupt)
+    if opt_D is not None:
+        torch.save(opt_D.state_dict(), os.path.join(log_dir, f"opt_D_{suffix}.pt"))
+    if opt_Gs is not None:
+        for i, opt_G in enumerate(opt_Gs):
+            torch.save(opt_G.state_dict(), os.path.join(log_dir, f"opt_G_{i}_{suffix}.pt"))
+    if opt_E is not None:
+        torch.save(opt_E.state_dict(), os.path.join(log_dir, f"opt_E_{suffix}.pt"))
+    if opt_C is not None:
+        torch.save(opt_C.state_dict(), os.path.join(log_dir, f"opt_C_{suffix}.pt"))
 
-def load_saved_models(G, E, D, C, weights_dir, epoch):
+def load_saved_models(G, E, D, C, weights_dir, epoch, opt_D=None, opt_Gs=None, opt_E=None, opt_C=None):
     G.load_state_dict(torch.load(os.path.join(weights_dir, f"G_{epoch}.pt")))
     E.load_state_dict(torch.load(os.path.join(weights_dir, f"E_{epoch}.pt")))
     D.load_state_dict(torch.load(os.path.join(weights_dir, f"D_{epoch}.pt")))
     C.load_state_dict(torch.load(os.path.join(weights_dir, f"C_{epoch}.pt")))
+    # Load optimizers if provided
+    if opt_D is not None:
+        opt_D_path = os.path.join(weights_dir, f"opt_D_{epoch}.pt")
+        if os.path.exists(opt_D_path):
+            opt_D.load_state_dict(torch.load(opt_D_path))
+    if opt_Gs is not None:
+        for i, opt_G in enumerate(opt_Gs):
+            opt_G_path = os.path.join(weights_dir, f"opt_G_{i}_{epoch}.pt")
+            if os.path.exists(opt_G_path):
+                opt_G.load_state_dict(torch.load(opt_G_path))
+    if opt_E is not None:
+        opt_E_path = os.path.join(weights_dir, f"opt_E_{epoch}.pt")
+        if os.path.exists(opt_E_path):
+            opt_E.load_state_dict(torch.load(opt_E_path))
+    if opt_C is not None:
+        opt_C_path = os.path.join(weights_dir, f"opt_C_{epoch}.pt")
+        if os.path.exists(opt_C_path):
+            opt_C.load_state_dict(torch.load(opt_C_path))
 
 # -----------------------------------------------------------------------------
 #  Dataset: each subfolder under data_root is a class.
 #  Inside each, there are 'mel/' and/or 'mfcc/' subfolders.
 # -----------------------------------------------------------------------------
+
 class MultiFeatureDirectoryDataset(Dataset):
     def __init__(self, data_root, use_mel=True, use_mfcc=True):
         if not (use_mel or use_mfcc):
@@ -43,42 +72,91 @@ class MultiFeatureDirectoryDataset(Dataset):
         if not classes:
             raise ValueError(f"No subfolders in {data_root}")
 
+        # each sample is (path_pair, idx, label, is_stacked)
         self.samples = []
         for label, cls in enumerate(classes):
             base = os.path.join(data_root, cls)
+
+            # check for stacked.npy in mel/ and mfcc/
+            mel_stack  = os.path.join(base, "mel",  "stacked.npy") if use_mel  else None
+            mfcc_stack = os.path.join(base, "mfcc", "stacked.npy") if use_mfcc else None
+
+            if (mel_stack and os.path.isfile(mel_stack)) or \
+               (mfcc_stack and os.path.isfile(mfcc_stack)):
+
+                # load lengths without fully loading into RAM
+                arr_m = np.load(mel_stack,  mmap_mode="r") if mel_stack and os.path.isfile(mel_stack)   else None
+                arr_f = np.load(mfcc_stack, mmap_mode="r") if mfcc_stack and os.path.isfile(mfcc_stack) else None
+
+                # sanity-check dims
+                if arr_m is not None and arr_m.ndim != 3:
+                    raise ValueError(f"{mel_stack} must be 3D, got {arr_m.shape}")
+                if arr_f is not None and arr_f.ndim != 3:
+                    raise ValueError(f"{mfcc_stack} must be 3D, got {arr_f.shape}")
+
+                n = (arr_m.shape[0] if arr_m is not None else arr_f.shape[0])
+                for i in range(n):
+                    self.samples.append(((mel_stack, mfcc_stack), i, label, True))
+                continue
+
+            # fallback to per-file under mel/ and mfcc/
             mel_dir  = os.path.join(base, 'mel')  if use_mel  else None
             mfcc_dir = os.path.join(base, 'mfcc') if use_mfcc else None
 
-            # check existence
             if use_mel and not os.path.isdir(mel_dir):
                 raise FileNotFoundError(f"Missing mel/ under {base}")
             if use_mfcc and not os.path.isdir(mfcc_dir):
                 raise FileNotFoundError(f"Missing mfcc/ under {base}")
 
-            # list filenames from the first available feature
             fnames = sorted(os.listdir(mel_dir if use_mel else mfcc_dir))
             for fn in fnames:
                 if not fn.endswith('.npy'):
                     continue
-                mel_path  = os.path.join(mel_dir, fn)  if use_mel  else None
-                mfcc_path = os.path.join(mfcc_dir, fn) if use_mfcc else None
-                # if both, ensure both exist
-                if use_mel and use_mfcc and not os.path.exists(mfcc_path):
-                    raise FileNotFoundError(f"{mfcc_path} missing")
-                self.samples.append((mel_path, mfcc_path, label))
+                m_path = os.path.join(mel_dir, fn)  if use_mel  else None
+                f_path = os.path.join(mfcc_dir, fn) if use_mfcc else None
+                if use_mel and use_mfcc and not os.path.exists(f_path):
+                    raise FileNotFoundError(f"{f_path} missing")
+                # idx is ignored in per-file mode
+                self.samples.append(((m_path, f_path), None, label, False))
+
+        if not self.samples:
+            raise ValueError("No samples found!")
+
+        # cache for __getitem__
+        self._cache = [None] * len(self.samples)
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        mel_path, mfcc_path, label = self.samples[idx]
+        # return cached if available
+        if self._cache[idx] is not None:
+            return self._cache[idx]
+
+        path_pair, slice_idx, label, is_stacked = self.samples[idx]
+        mel_path, mfcc_path = path_pair
         feats = []
-        if mel_path:
-            feats.append(np.load(mel_path))
-        if mfcc_path:
-            feats.append(np.load(mfcc_path))
-        x = np.stack(feats, axis=0)            # shape = [C,H,W], C=1 or 2
-        return torch.from_numpy(x).float(), label
+
+        if is_stacked:
+            # load only the needed slice
+            if mel_path and os.path.isfile(mel_path):
+                arr_m = np.load(mel_path, mmap_mode="r")
+                feats.append(arr_m[slice_idx])
+            if mfcc_path and os.path.isfile(mfcc_path):
+                arr_f = np.load(mfcc_path, mmap_mode="r")
+                feats.append(arr_f[slice_idx])
+        else:
+            # per-file
+            if mel_path:
+                feats.append(np.load(mel_path))
+            if mfcc_path:
+                feats.append(np.load(mfcc_path))
+
+        x = np.stack(feats, axis=0).astype(np.float32)  # [C,H,W]
+        tensor = (torch.from_numpy(x), label)
+        self._cache[idx] = tensor
+        return tensor
+
 
 # -----------------------------------------------------------------------------
 #  Save training config
@@ -159,16 +237,16 @@ def train(args):
     G = MultiGenerator(
         args.z_dim, out_channels=n_features,
         base_channels=32, img_size=H,
-        n_layers=3, n_clusters=args.n_clusters
+        n_layers=4, n_clusters=args.n_clusters
     ).to(device)
     E = MultiEncoder(
         in_channels=n_features, z_dim=args.z_dim,
         base_channels=32, img_size=H,
-        n_layers=3, n_clusters=args.n_clusters
+        n_layers=4, n_clusters=args.n_clusters
     ).to(device)
     D = Discriminator(
         in_channels=n_features, base_channels=32,
-        n_layers=3
+        n_layers=4
     ).to(device)
 
     # classifier input channels
@@ -180,8 +258,15 @@ def train(args):
 
     # optimizers
     opt_D = torch.optim.Adam(D.parameters(), lr=args.lr, betas=(0.0, 0.9))
-    opt_G = torch.optim.Adam(G.parameters(), lr=args.lr, betas=(0.0, 0.9))
-    opt_E = torch.optim.Adam(E.parameters(), lr=args.lr, betas=(0.0, 0.9))
+    opt_Gs = [
+        torch.optim.Adam(g.parameters(), lr=args.lr, betas=(0.0, 0.9))
+        for g in G.generators
+    ]
+    opt_Es = [
+        torch.optim.Adam(enc.parameters(), lr=args.lr, betas=(0.0, 0.9))
+        for enc in E.encoders
+    ]
+
     opt_C = torch.optim.Adam(C.parameters(), lr=args.lr, betas=(0.0, 0.9))
 
     writer = SummaryWriter(args.log_dir)
@@ -191,7 +276,8 @@ def train(args):
     # Load saved weights if resuming
     if args.resume:
         print(f"Resuming from epoch {start_epoch}")
-        load_saved_models(G, E, D, C, args.resume, start_epoch)
+        load_saved_models(G, E, D, C, args.resume, start_epoch,
+                          opt_D=opt_D, opt_Gs=opt_Gs, opt_E=opt_Es, opt_C=opt_C)
 
     # Training loop
     try:
@@ -213,64 +299,75 @@ def train(args):
 
                 # — Generator, Encoder & Classifier every n_critic steps —
                 if d_steps % args.n_critic == 0:
-                    # Generator + classification + latent consistency
-                    fake      = G(z, k, target_hw=real.shape[-2:])
-                    d_fake    = D(fake)
-                    feat_fake = D.intermediate(fake)
-                    logits    = C(feat_fake)
+                    # — Generator + classification + latent consistency, per cluster —
+                    # for each cluster i present in this batch
+                    for i in torch.unique(k):
+                        idx = (k == i).nonzero(as_tuple=False).view(-1)
+                        z_i = z[idx]
+                        real_hw = real.shape[-2:]
+                        # generate only for cluster i
+                        fake_i = G.generators[i](z_i, None)
+                        if fake_i.shape[-2:] != real_hw:
+                            fake_i = F.interpolate(fake_i, size=real_hw,
+                                                mode='bilinear', align_corners=False)
 
-                    # classification loss on generator output
-                    loss_cls  = F.cross_entropy(logits, k)
+                        # adversarial loss
+                        adv_i    = -D(fake_i).mean()
+                        # classification loss on generator outputs
+                        feat_i   = D.intermediate(fake_i)
+                        logits_i = C(feat_i)
+                        cls_i    = F.cross_entropy(logits_i, k[idx])
+                        # latent consistency loss
+                        z_hat_i  = E(fake_i.detach(), k[idx])
+                        lat_i    = F.mse_loss(z_hat_i, z_i)
 
-                    # reconstruct z from the fake sample
-                    z_hat     = E(fake, k)
-                    loss_lat  = F.mse_loss(z_hat, z)
+                        loss_G_i = adv_i - args.lambda_cls * cls_i + args.lambda_lat * lat_i
 
-                    # combine adversarial, classification and latent-consistency
-                    loss_G    = -d_fake.mean() \
-                                - args.lambda_cls * loss_cls \
-                                + args.lambda_lat * loss_lat
+                        # update only generator i
+                        opt_Gs[i].zero_grad()
+                        loss_G_i.backward(retain_graph=True)
+                        opt_Gs[i].step()
 
-                    # zero both optimizers so G and E both learn
-                    opt_G.zero_grad()
-                    opt_E.zero_grad()
-                    loss_G.backward()
-                    opt_G.step()
-                    opt_E.step()
+                        # log per-cluster
+                        writer.add_scalar(f'Loss/G_cluster_{i}', loss_G_i.item(), global_step)
+                        writer.add_scalar(f'Loss/Cls_G_cluster_{i}', cls_i.item(), global_step)
+                        writer.add_scalar(f'Loss/Lat_cluster_{i}', lat_i.item(), global_step)
 
-                    # now update E’s standalone encoder loss and the classifier
-                    z_hat2    = E(fake.detach(), k)
-                    loss_E    = F.mse_loss(z_hat2, z.detach())
-                    opt_E.zero_grad()
-                    loss_E.backward()
-                    opt_E.step()
+                    # Encoder standalone update
+                    # Encoder per-cluster update
+                    z_hat2 = E(fake.detach(), k)
+                    z_target = z.detach()
+                    for i in torch.unique(k):
+                        idx      = (k == i).nonzero(as_tuple=False).view(-1)
+                        loss_E_i = F.mse_loss(z_hat2[idx], z_target[idx])
+                        opt_Es[i].zero_grad()
+                        loss_E_i.backward(retain_graph=True)
+                        opt_Es[i].step()
+                        writer.add_scalar(f'Loss/E_cluster_{i}', loss_E_i.item(), global_step)
 
+
+                    # Classifier standalone update
                     opt_C.zero_grad()
-                    logits2   = C(feat_fake.detach())
-                    loss_C2   = F.cross_entropy(logits2, k)
+                    logits2 = C(D.intermediate(fake.detach()))
+                    loss_C2 = F.cross_entropy(logits2, k)
                     loss_C2.backward()
                     opt_C.step()
-
                     # log scalars as before
-                    writer.add_scalar('Loss/G',     loss_G.item(),   global_step)
-                    writer.add_scalar('Loss/Cls_on_G', loss_cls.item(), global_step)
-                    writer.add_scalar('Loss/Lat',   loss_lat.item(), global_step)
-                    writer.add_scalar('Loss/E',     loss_E.item(),   global_step)
+                    
                     writer.add_scalar('Loss/C',     loss_C2.item(),  global_step)
 
                 global_step += 1
 
-            print(f"Epoch {epoch+1}/{args.epochs} — D={loss_D:.4f}  G={loss_G:.4f}")
+            print(f"Epoch {epoch+1}/{args.epochs} — D={loss_D:.4f}")
             if (epoch + 1) % 20 == 0:
                 save_all_models(G, E, D, C, args.log_dir, epoch+1)
 
         save_all_models(G, E, D, C, args.log_dir, args.epochs)
-
     except KeyboardInterrupt:
-        print("Interrupted—saving models…")
-        save_all_models(G, E, D, C, args.log_dir, f"interrupt_{epoch+1}")
+        print("Interrupted—saving models with opt…")
+        save_all_models(G, E, D, C, args.log_dir, f"interrupt_{epoch+1}",
+                        opt_D=opt_D, opt_Gs=opt_Gs, opt_E=opt_E, opt_C=opt_C)
         raise
-
     finally:
         writer.close()
 
@@ -282,8 +379,8 @@ if __name__ == "__main__":
     p.add_argument("--data_root",  required=True,
                    help="Root folder (e.g. data_40) with class subfolders")
     p.add_argument("--log_dir",    required=True)
-    p.add_argument("--batch_size", type=int,   default=16)
-    p.add_argument("--epochs",     type=int,   default=2000)
+    p.add_argument("--batch_size", type=int,   default=256)
+    p.add_argument("--epochs",     type=int,   default=700)
     p.add_argument("--z_dim",      type=int,   default=128)
     p.add_argument("--n_clusters", type=int,   default=8)
     p.add_argument("--n_critic",   type=int,   default=5)
@@ -304,5 +401,5 @@ if __name__ == "__main__":
         args.log_dir = args.resume
     else:
         os.makedirs(args.log_dir, exist_ok=True)
-    
-    train(args)
+        
+        train(args)

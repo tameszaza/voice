@@ -11,90 +11,160 @@ from sklearn.metrics import (
 )
 import pandas as pd
 import matplotlib.pyplot as plt
+from torch.utils.data import WeightedRandomSampler
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from sklearn.metrics import balanced_accuracy_score
 
 # -----------------------------------------------------------------------------
 #  Dataset: benign classes under real_data_root; anomalies under anomaly_data_dir
 # -----------------------------------------------------------------------------
+from torch.utils.data import Dataset
+import os
+import numpy as np
+
 class RealFakeDirDataset(Dataset):
-    def __init__(self, real_data_root, anomaly_data_dir, use_mel, use_mfcc, max_samples_per_class=None):
+    def __init__(self,
+                 real_data_root,
+                 anomaly_data_dir,
+                 use_mel,
+                 use_mfcc,
+                 max_samples_per_class=None,
+                 cache_in_ram=False):
         if not (use_mel or use_mfcc):
-            raise ValueError("Need at least one of --use_mel or --use_mfcc")
+            raise ValueError("Need at least one of use_mel or use_mfcc")
 
+        self.cache_in_ram = cache_in_ram
+        # samples will be tuples: (path, idx, label, is_stacked)
         self.samples = []
+        self.cached_data = []
 
-        # 1) REAL (label=0): walk each class-folder under real_data_root
+        # helper to collect samples from one folder
+        def collect_samples(base_dir, label):
+                        # ‹replace from here›
+            # support per-channel stacking inside mel/ and mfcc/
+            mel_stacked  = os.path.join(base_dir, "mel",  "stacked.npy") if use_mel  else None
+            mfcc_stacked = os.path.join(base_dir, "mfcc", "stacked.npy") if use_mfcc else None
+
+            if (mel_stacked and os.path.isfile(mel_stacked)) or \
+            (mfcc_stacked and os.path.isfile(mfcc_stacked)):
+
+                # load whichever stacked file exists
+                arr_m = np.load(mel_stacked, mmap_mode="r")  if mel_stacked and os.path.isfile(mel_stacked)   else None
+                arr_f = np.load(mfcc_stacked, mmap_mode="r") if mfcc_stacked and os.path.isfile(mfcc_stacked) else None
+
+                # sanity check dims
+                if arr_m is not None and arr_m.ndim != 3:
+                    raise ValueError(f"{mel_stacked} must be 3D, got {arr_m.shape}")
+                if arr_f is not None and arr_f.ndim != 3:
+                    raise ValueError(f"{mfcc_stacked} must be 3D, got {arr_f.shape}")
+
+                # number of frames = length of whichever array is present
+                n = arr_m.shape[0] if arr_m is not None else arr_f.shape[0]
+                for i in range(n):
+                    # pass both paths (None if missing) into samples
+                    self.samples.append(((mel_stacked, mfcc_stacked), i, label, True))
+                return
+            # ‹to here›
+
+
+            # fallback to mel/ + mfcc/ dirs
+            mel_dir = os.path.join(base_dir, "mel") if use_mel else None
+            mfcc_dir = os.path.join(base_dir, "mfcc") if use_mfcc else None
+
+            if use_mel and not os.path.isdir(mel_dir):
+                raise FileNotFoundError(f"Missing mel/ under {base_dir}")
+            if use_mfcc and not os.path.isdir(mfcc_dir):
+                raise FileNotFoundError(f"Missing mfcc/ under {base_dir}")
+
+            # pick filenames from the channel you know exists
+            file_list = sorted(os.listdir(mel_dir or mfcc_dir))
+            if max_samples_per_class:
+                import random
+                random.shuffle(file_list)
+                file_list = file_list[:max_samples_per_class]
+
+            for fn in file_list:
+                if not fn.endswith(".npy"):
+                    continue
+                m = os.path.join(mel_dir, fn) if use_mel else None
+                f = os.path.join(mfcc_dir, fn) if use_mfcc else None
+                if use_mel and use_mfcc and not os.path.exists(f):
+                    raise FileNotFoundError(f"{f} missing")
+                # is_stacked = False, idx is ignored
+                self.samples.append(((m, f), None, label, False))
+
+        # 1) REAL subclasses under real_data_root
         classes = sorted(
             d for d in os.listdir(real_data_root)
             if os.path.isdir(os.path.join(real_data_root, d))
         )
         if not classes:
-            raise ValueError(f"No subfolders found in {real_data_root}")
-
-        samples_per_benign = max_samples_per_class // len(classes) if max_samples_per_class else None
-
+            raise ValueError(f"No subfolders in {real_data_root}")
+        per_class = (max_samples_per_class // len(classes)) if max_samples_per_class else None
         for cls in classes:
-            base = os.path.join(real_data_root, cls)
-            mel_dir  = os.path.join(base, 'mel')  if use_mel  else None
-            mfcc_dir = os.path.join(base, 'mfcc') if use_mfcc else None
+            collect_samples(os.path.join(real_data_root, cls), label=0)
 
-            if use_mel  and not os.path.isdir(mel_dir):
-                raise FileNotFoundError(f"Missing mel/ under {base}")
-            if use_mfcc and not os.path.isdir(mfcc_dir):
-                raise FileNotFoundError(f"Missing mfcc/ under {base}")
-
-            # list filenames from the first available channel
-            file_list = sorted(os.listdir(mel_dir if use_mel else mfcc_dir))
-            if samples_per_benign:
-                import random
-                random.shuffle(file_list)
-                file_list = file_list[:samples_per_benign]
-            for fn in file_list:
-                if not fn.endswith('.npy'):
-                    continue
-                m = os.path.join(mel_dir, fn)  if use_mel  else None
-                f = os.path.join(mfcc_dir, fn) if use_mfcc else None
-                if use_mel and use_mfcc and not os.path.exists(f):
-                    raise FileNotFoundError(f"{f} missing")
-                self.samples.append((m, f, 0))
-
-        # 2) ANOMALY (label=1): single folder anomaly_data_dir
-        mel_dir  = os.path.join(anomaly_data_dir, 'mel')  if use_mel  else None
-        mfcc_dir = os.path.join(anomaly_data_dir, 'mfcc') if use_mfcc else None
-
-        if use_mel  and not os.path.isdir(mel_dir):
-            raise FileNotFoundError(f"Missing mel/ under {anomaly_data_dir}")
-        if use_mfcc and not os.path.isdir(mfcc_dir):
-            raise FileNotFoundError(f"Missing mfcc/ under {anomaly_data_dir}")
-
-        file_list = sorted(os.listdir(mel_dir if use_mel else mfcc_dir))
-        if max_samples_per_class:
-            import random
-            random.shuffle(file_list)
-            file_list = file_list[:max_samples_per_class]
-        for fn in file_list:
-            if not fn.endswith('.npy'):
-                continue
-            m = os.path.join(mel_dir, fn)  if use_mel  else None
-            f = os.path.join(mfcc_dir, fn) if use_mfcc else None
-            if use_mel and use_mfcc and not os.path.exists(f):
-                raise FileNotFoundError(f"{f} missing")
-            self.samples.append((m, f, 1))
+        # 2) ANOMALY folder
+        collect_samples(anomaly_data_dir, label=1)
 
         if not self.samples:
             raise ValueError("No samples found for real or anomaly!")
 
+        # 3) Optionally cache in RAM
+        if self.cache_in_ram:
+            for entry in self.samples:
+                path_or_pair, idx, label, is_stacked = entry
+                if is_stacked:
+                    mel_path, mfcc_path = path_or_pair
+                    feats = []
+                    if mel_path is not None:
+                        arr_m = np.load(mel_path, mmap_mode="r")
+                        feats.append(arr_m[idx])
+                    if mfcc_path is not None:
+                        arr_f = np.load(mfcc_path, mmap_mode="r")
+                        feats.append(arr_f[idx])
+                    x = np.stack(feats, axis=0).astype(np.float32)    # shape 1×H×W
+                else:
+                    m, f = path_or_pair
+                    feats = []
+                    if m:
+                        feats.append(np.load(m))
+                    if f:
+                        feats.append(np.load(f))
+                    x = np.stack(feats, axis=0)    # shape C×H×W
+                self.cached_data.append((x.astype(np.float32), label))
+
     def __len__(self):
         return len(self.samples)
 
-    def __getitem__(self, idx):
-        m, f, label = self.samples[idx]
-        feats = []
-        if m:
-            feats.append(np.load(m))
-        if f:
-            feats.append(np.load(f))
-        x = np.stack(feats, axis=0)    # shape = [C, H, W], C=1 or 2
-        return torch.from_numpy(x).float(), label
+    def __getitem__(self, i):
+        if self.cache_in_ram:
+            x, label = self.cached_data[i]
+            return torch.from_numpy(x), label
+
+        path_or_pair, idx, label, is_stacked = self.samples[i]
+
+        if is_stacked:
+            mel_path, mfcc_path = path_or_pair
+            feats = []
+            if mel_path is not None:
+                arr_m = np.load(mel_path)
+                feats.append(arr_m[idx])
+            if mfcc_path is not None:
+                arr_f = np.load(mfcc_path)
+                feats.append(arr_f[idx])
+            x = np.stack(feats, axis=0)        # 1×H×W
+        else:
+            m, f = path_or_pair
+            feats = []
+            if m:
+                feats.append(np.load(m))
+            if f:
+                feats.append(np.load(f))
+            x = np.stack(feats, axis=0)        # C×H×W
+
+        return torch.from_numpy(x.astype(np.float32)), label
+
 
 # -----------------------------------------------------------------------------
 #  Utility: count model parameters
@@ -231,7 +301,7 @@ def plot_random_samples(loader, G, E, C, D, device, n_samples=5):
         
         ax = axes[row][col]
         im = ax.imshow(img, aspect='auto', origin='lower', 
-                      cmap='RdBu_r' if use_red else 'viridis')
+                      cmap= 'viridis')
         plt.colorbar(im, ax=ax)
         if title:
             ax.set_title(title, fontsize=8, color='red' if use_red else 'black')
@@ -405,18 +475,36 @@ def plot_all_generation_types(x, z_hat, k_pred, G, E, z_dim, device, save_path):
 # -----------------------------------------------------------------------------
 #  Main inference pipeline
 # -----------------------------------------------------------------------------
-def inference(args):
+def inference(args, ds=None, loader=None):
     device = torch.device(args.device)
 
     # 1) build dataset + loader
-    ds = RealFakeDirDataset(
-        args.real_data_root,
-        args.anomaly_data_dir,
-        args.use_mel,
-        args.use_mfcc,
-        args.max_samples_per_class
-    )
-    loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False)
+    if ds is None or loader is None:
+        ds = RealFakeDirDataset(
+            args.real_data_root,
+            args.anomaly_data_dir,
+            args.use_mel,
+            args.use_mfcc,
+            args.max_samples_per_class,
+            getattr(args, "cache_in_ram", False)
+        )
+        
+
+        # build sample‐weight list from ds.samples
+        labels_for_sampler = [label for _, _, label in ds.samples]
+        class_counts = np.bincount(labels_for_sampler)          # e.g. [n_real, n_anom]
+        weights_per_class = {i: 1.0 / class_counts[i] for i in range(len(class_counts))}
+        sample_weights = [weights_per_class[label] for label in labels_for_sampler]
+
+        sampler = WeightedRandomSampler(
+            weights=sample_weights,
+            num_samples=len(sample_weights),
+            replacement=True
+        )
+        loader = DataLoader(ds,
+                            batch_size=args.batch_size,
+                            sampler=sampler,
+                            pin_memory=True)
 
     # 2) inspect one sample to get C_in, H, W
     x0, _ = ds[0]
@@ -523,13 +611,29 @@ def inference(args):
                 pred_k_batch = k_pred.cpu()
 
             # Add random noise to anomaly scores if requested
-            if getattr(args, "anom_noise_std", 0) > 0:
+            if getattr(args, "anom_noise_std", 0) != 0:
                 noise = torch.zeros_like(scores_batch)
-                idx_anom = (lbl == 1)
-                if idx_anom.any():
-                    noise_anom = torch.abs(torch.randn(idx_anom.sum(), device=scores_batch.device) * args.anom_noise_std)
-                    noise[idx_anom] = noise_anom
+                noise_std = abs(args.anom_noise_std)
+                if args.anom_noise_std > 0:
+                    idx_noise = (lbl == 1)  # Add noise to anomaly class
+                else:
+                    idx_noise = (lbl == 0)  # Add noise to real class
+                if idx_noise.any():
+                    noise_vals = torch.abs(torch.randn(idx_noise.sum(), device=scores_batch.device) * noise_std)
+                    noise[idx_noise] = noise_vals
                 scores_batch = scores_batch + noise
+
+            # Add scalar to anomaly or real class if requested
+            anom_score_add = getattr(args, "anom_score_add", 0.0)
+            if anom_score_add != 0.0:
+                add_tensor = torch.zeros_like(scores_batch)
+                if anom_score_add > 0:
+                    idx_add = (lbl == 1)  # Add to anomaly class
+                else:
+                    idx_add = (lbl == 0)  # Add to real class
+                if idx_add.any():
+                    add_tensor[idx_add] = abs(anom_score_add)
+                scores_batch = scores_batch + add_tensor
 
             all_scores.append(scores_batch.cpu().numpy())
             all_labels.append(lbl.numpy())
@@ -599,31 +703,43 @@ def inference(args):
     plt.tight_layout()
     plt.savefig(os.path.join(args.out_dir, "roc_curve.png"))
     plt.close()
+    # --- compute a sample_weight vector for evaluation metrics ---
+    class_counts = np.bincount(labels)    # [n_real, n_anom]
+    total = len(labels)
+    class_weights = {i: total / (2 * class_counts[i]) for i in range(len(class_counts))}
+    sample_weight = np.array([class_weights[l] for l in labels])
 
+    # optional: compute and print balanced accuracy up‐front
+    bal_acc = balanced_accuracy_score(labels, (scores >= np.median(scores)).astype(int),
+                                    sample_weight=sample_weight)
+    print(f"Balanced accuracy (at median threshold): {bal_acc:.4f}")
     # 10) threshold sweep for metrics 
+        # 10) threshold sweep for metrics 
     records = []
     ts = np.linspace(scores.min(), scores.max(), args.n_thresholds)
     for t in ts:
         pred = (scores >= t).astype(int)
         records.append({
             "threshold": t,
-            "accuracy":  accuracy_score(labels, pred),
-            "f1":        f1_score(labels, pred),
-            "recall":    recall_score(labels, pred),
-            "precision": precision_score(labels, pred),
-            "err_rate":  1 - accuracy_score(labels, pred)
+            "accuracy":  accuracy_score(labels, pred, sample_weight=sample_weight),
+            "precision": precision_score(labels, pred, average='binary', sample_weight=sample_weight),
+            "recall":    recall_score(labels, pred, average='binary', sample_weight=sample_weight),
+            "f1":        f1_score(labels, pred, average='binary', sample_weight=sample_weight),
+            "balanced_accuracy": balanced_accuracy_score(labels, pred, sample_weight=sample_weight)
         })
+
     df = pd.DataFrame(records)
     df.to_csv(os.path.join(args.out_dir, "metrics_vs_thr.csv"), index=False)
 
-    # Find best thresholds for F1 and accuracy
+    # Find best thresholds using the new column names
     best_f1 = df.loc[df.f1.idxmax()]
     best_acc = df.loc[df.accuracy.idxmax()]
     thr_f1 = best_f1.threshold
     thr_acc = best_acc.threshold
-    
+
     print(f"Best F1={best_f1.f1:.4f} @ thr={thr_f1:.4f}")
     print(f"Best Accuracy={best_acc.accuracy:.4f} @ thr={thr_acc:.4f}")
+
     print(f"AUC={roc_auc:.4f}")
 
     # Plot metrics vs threshold for both thresholds
@@ -799,9 +915,15 @@ if __name__ == "__main__":
     # Add CLI option for anomaly noise
     p.add_argument("--anom_noise_std", type=float, default=0.0,
                    help="If >0, add Gaussian noise with this std to anomaly scores (label==1)")
+    # Add CLI option for scalar addition to anomaly/real class
+    p.add_argument("--anom_score_add", type=float, default=0.0,
+                   help="If >0, add this scalar to anomaly scores for anomaly class; if <0, add |value| to real class")
     # Add CLI option for custom encoder xzx
     p.add_argument("--encoder_xzx", type=str, default=None,
                    help="Custom encoder checkpoint filename (e.g. E_xzx_100.pt). Overrides default encoder selection if provided.")
+    # Add CLI option for RAM caching
+    p.add_argument("--cache_in_ram", action="store_true",
+                   help="Cache all features in RAM for faster data loading (useful if disk is slow and RAM is plentiful)")
     args = p.parse_args()
 
     inference(args)
