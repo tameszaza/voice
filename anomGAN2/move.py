@@ -2,19 +2,18 @@
 """
 split_mel_mfcc.py
 
-Recursively scan your source folder for `*/mel/*.npy`, randomly
-select 20% of those filenames, and move both the mel and its
-matching mfcc file to a separate test directory—preserving
-the entire folder hierarchy.
+Scan your source for `*/mel/*.npy` or `*/mel/stacked.npy`,
+randomly select a fraction to move into a test directory,
+and leave the remaining train data behind in `src`.
 
 Usage:
     python split_mel_mfcc.py \
-        --src /path/to/data_256 \
-        --dst /path/to/data_256_test \
-        --ratio 0.2 \
-        --seed 42
+      --src /path/to/data_256 \
+      --dst /path/to/data_256_test \
+      --ratio 0.2 \
+      --seed 42
 """
-
+import numpy as np
 import argparse
 import random
 import shutil
@@ -22,91 +21,107 @@ from pathlib import Path
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Split mel/mfcc .npy files into train/test sets by filename."
+        description="Move a fraction of mel/mfcc data into a test folder, "
+                    "leaving the rest as train in-place."
     )
-    p.add_argument(
-        "--src", "-s",
-        required=True,
-        type=Path,
-        help="Root of your original dataset (e.g. data_256)."
-    )
-    p.add_argument(
-        "--dst", "-d",
-        required=True,
-        type=Path,
-        help="Where your test subset will be moved (e.g. data_256_test)."
-    )
-    p.add_argument(
-        "--ratio", "-r",
-        type=float,
-        default=0.2,
-        help="Fraction to reserve for test (default 0.2 = 20%%)."
-    )
-    p.add_argument(
-        "--seed",
-        type=int,
-        default=42,
-        help="Random seed for reproducibility (default 42)."
-    )
-    p.add_argument(
-        "--ext",
-        type=str,
-        default=".npy",
-        help="File extension (default .npy)."
-    )
+    p.add_argument("--src",   "-s", required=True, type=Path,
+                   help="Root of your original dataset")
+    p.add_argument("--dst",   "-d", required=True, type=Path,
+                   help="Where the test subset will be moved")
+    p.add_argument("--ratio", "-r", type=float, default=0.2,
+                   help="Fraction reserved for test (default 0.2)")
+    p.add_argument("--seed",  type=int,   default=42,
+                   help="Random seed (default 42)")
+    p.add_argument("--ext",   type=str,   default=".npy",
+                   help="File extension (default .npy)")
     return p.parse_args()
 
 def main():
-    args = parse_args()
-    src = args.src.resolve()
-    dst = args.dst.resolve()
-    ratio = args.ratio
-    seed = args.seed
-    ext = args.ext
+    args     = parse_args()
+    src      = args.src.resolve()
+    dst      = args.dst.resolve()
+    ratio    = args.ratio
+    random.seed(args.seed)
+    ext      = args.ext
 
     if not src.exists():
-        raise FileNotFoundError(f"Source folder '{src}' not found.")
+        raise FileNotFoundError(f"Source not found: {src}")
     if src == dst:
-        raise ValueError("Source and destination must be different paths.")
+        raise ValueError("Source and destination must differ")
 
-    # 1) Find all mel files
-    mel_files = list(src.rglob(f"*/mel/*{ext}"))
-    if not mel_files:
-        print(f"No '{ext}' files under any 'mel' folder in {src}.")
-        return
-
-    # 2) Shuffle & pick test filenames (by file *name*, not full path)
-    random.seed(seed)
-    random.shuffle(mel_files)
-    n_test = int(len(mel_files) * ratio)
-    test_mel_files = mel_files[:n_test]
+    # Map each class-folder parent -> list of mel files
+    mel_by_parent = {}
+    for mel in src.rglob(f"*/mel/*{ext}"):
+        parent = mel.parent.parent
+        mel_by_parent.setdefault(parent, []).append(mel)
 
     moved = 0
-    for mel_path in test_mel_files:
-        # Compute where it sits under src
-        rel_mel = mel_path.relative_to(src)
-        dst_mel = dst / rel_mel
+    total = 0
 
-        # 3) Move mel file
-        dst_mel.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(mel_path), str(dst_mel))
+    for parent, mel_list in mel_by_parent.items():
+        rel = parent.relative_to(src)
+        mel_stack  = parent / "mel"  / f"stacked{ext}"
+        mfcc_stack = parent / "mfcc" / f"stacked{ext}"
 
-        # 4) Locate & move the matching mfcc file
-        #    same parent.parent but in 'mfcc' subfolder
-        model_dir = mel_path.parent.parent
-        mfcc_path = model_dir / "mfcc" / mel_path.name
-        if mfcc_path.exists():
-            rel_mfcc = mfcc_path.relative_to(src)
-            dst_mfcc = dst / rel_mfcc
-            dst_mfcc.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(mfcc_path), str(dst_mfcc))
-        else:
-            print(f"[WARN] No mfcc file for '{mel_path.name}' at expected location:\n  {mfcc_path}")
+        # --- STACKED CASE ---
+                # --- STACKED CASE ---
+        if mel_stack.exists() and mfcc_stack.exists():
+            arr_m = np.load(mel_stack)
+            arr_f = np.load(mfcc_stack)
+            n     = arr_m.shape[0]
+            total += n
 
-        moved += 1
+            idxs = list(range(n))
+            random.shuffle(idxs)
+            cut = int(n * ratio)
+            test_idxs  = idxs[:cut]
+            train_idxs = idxs[cut:]
 
-    total = len(mel_files)
-    print(f"→ Total mel files found : {total}")
+            # 1) write test stacked.npy
+            dst_mel_stack  = dst  / rel / "mel"  / f"stacked{ext}"
+            dst_mfcc_stack = dst  / rel / "mfcc" / f"stacked{ext}"
+            dst_mel_stack .parent.mkdir(parents=True, exist_ok=True)
+            dst_mfcc_stack.parent.mkdir(parents=True, exist_ok=True)
+
+            test_m = arr_m[test_idxs]    # shape (n_test, H, W)
+            test_f = arr_f[test_idxs]
+            np.save(str(dst_mel_stack),  test_m)
+            np.save(str(dst_mfcc_stack), test_f)
+            moved += len(test_idxs)
+
+            # 2) overwrite original with train stacked.npy
+            train_m = arr_m[train_idxs]
+            train_f = arr_f[train_idxs]
+            np.save(mel_stack,  train_m)
+            np.save(mfcc_stack, train_f)
+
+            continue
+
+
+        # --- PER-FILE CASE ---
+        files = list(mel_list)
+        total += len(files)
+        random.shuffle(files)
+        cut = int(len(files) * ratio)
+        test_files = files[:cut]
+
+        for mel_path in test_files:
+            # move mel
+            rel_m = mel_path.relative_to(src)
+            dst_m = dst / rel_m
+            dst_m.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(mel_path), str(dst_m))
+
+            # move matching mfcc
+            mfcc_path = parent / "mfcc" / mel_path.name
+            if mfcc_path.exists():
+                rel_f = mfcc_path.relative_to(src)
+                dst_f = dst / rel_f
+                dst_f.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(mfcc_path), str(dst_f))
+            moved += 1
+
+    print(f"→ Total samples       : {total}")
     print(f"→ Moved to test       : {moved}")
     print(f"→ Remaining in train  : {total - moved}")
     print(f"Test set now lives in: {dst}")

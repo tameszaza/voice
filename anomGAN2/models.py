@@ -20,7 +20,7 @@ class Generator(nn.Module):
             modules += [
                 nn.Upsample(scale_factor=2),
                 nn.Conv2d(in_ch, out_ch, kernel_size=5, stride=1, padding=2),
-                nn.SELU(inplace=True)
+                nn.SELU(inplace=False)
             ]
             in_ch = out_ch
         # final conv back to data channels
@@ -79,7 +79,7 @@ class Encoder(nn.Module):
             kernel = 4 if i < n_layers-1 else 3
             modules.append(nn.Sequential(
                 nn.Conv2d(ch, out_ch, kernel_size=kernel, stride=2, padding=1),
-                nn.SELU(inplace=True)
+                nn.SELU(inplace=False)
             ))
             ch = out_ch
         self.conv = nn.Sequential(*modules)
@@ -135,7 +135,7 @@ class Discriminator(nn.Module):
             out_ch = base_channels * (2**i)
             modules.append(nn.Sequential(
                 nn.Conv2d(ch, out_ch, kernel_size=5, stride=2, padding=2),
-                nn.LeakyReLU(0.2, inplace=True)
+                nn.LeakyReLU(0.2, inplace=False)
             ))
             ch = out_ch
         self.net = nn.Sequential(*modules)
@@ -152,8 +152,10 @@ class Classifier(nn.Module):
     def __init__(self, in_channels, n_clusters):
         super().__init__()
         self.conv = nn.Conv2d(in_channels, 128, kernel_size=5, stride=2, padding=2)
-        self.bn   = nn.BatchNorm2d(128)
-        self.act  = nn.LeakyReLU(0.2, inplace=True)
+        # no running‐stat updates during gen/backward
+        self.bn   = nn.BatchNorm2d(128, affine=True, track_running_stats=False)
+
+        self.act  = nn.LeakyReLU(0.2, inplace=False)
         self.pool = nn.AdaptiveAvgPool2d(1)
         self.fc   = nn.Linear(128, n_clusters)
 

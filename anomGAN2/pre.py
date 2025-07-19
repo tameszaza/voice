@@ -38,62 +38,68 @@ def preprocess_clip(y, sr, n_fft, hop_length, n_mels):
 
     return S_db_norm, mfcc_norm
 
-def process_directory(dir_path, output_dir,
-                      sr=SR, n_fft=N_FFT, hop_length=HOP_LENGTH,
-                      n_mels=DEFAULT_N_MELS, target_duration=DEFAULT_DURATION):
+def process_directory(input_root,
+                      output_root,
+                      sr=SR,
+                      n_fft=N_FFT,
+                      hop_length=HOP_LENGTH,
+                      n_mels=DEFAULT_N_MELS,
+                      duration=DEFAULT_DURATION):
     """
     Recursively process all subfolders containing .wav files.
-    Save features in the same relative subfolder structure under output_dir.
+    For each folder, compute mel & mfcc for every fixed‐length clip,
+    stack them in memory, then write a single stacked.npy per channel.
     """
-    for root, dirs, files in os.walk(dir_path):
-        wav_files = [f for f in files if f.lower().endswith('.wav')]
-        if not wav_files:
-            continue  # Skip folders without wav files
+    target_samples = int(sr * duration)
 
-        # Compute relative path from input root to current folder
-        rel_path = os.path.relpath(root, dir_path)
-        mel_out = os.path.join(output_dir, rel_path, 'mel')
-        mfcc_out = os.path.join(output_dir, rel_path, 'mfcc')
-        os.makedirs(mel_out, exist_ok=True)
+    for root, dirs, files in os.walk(input_root):
+        wavs = [f for f in files if f.lower().endswith('.wav')]
+        if not wavs:
+            continue
+
+        # build output subfolders
+        rel = os.path.relpath(root, input_root)
+        mel_out  = os.path.join(output_root, rel, 'mel')
+        mfcc_out = os.path.join(output_root, rel, 'mfcc')
+        os.makedirs(mel_out,  exist_ok=True)
         os.makedirs(mfcc_out, exist_ok=True)
 
-        target_samples = int(sr * target_duration)
-        leftovers = []
+        # collect all clips in memory
+        mel_clips  = []
+        mfcc_clips = []
 
-        for fname in wav_files:
-            path = os.path.join(root, fname)
-            base = os.path.splitext(fname)[0]
-
-            # Load & trim silence
-            y, _ = librosa.load(path, sr=sr, res_type="kaiser_best")
+        for wav in wavs:
+            path = os.path.join(root, wav)
+            y, _ = librosa.load(path, sr=sr, res_type='kaiser_best')
             y_trim, _ = librosa.effects.trim(y)
 
-            # Chop into full-length clips
+            # how many full-duration clips
             n_full = len(y_trim) // target_samples
-            # Save comparison samples in the same relative structure (optional)
-            # comparison_dir = os.path.join(output_dir, rel_path, "comparison_samples")
-            # os.makedirs(comparison_dir, exist_ok=True)
-
             for i in range(n_full):
-                start = i * target_samples
-                end = (i + 1) * target_samples
-                clip = y_trim[start:end]
+                clip = y_trim[i*target_samples:(i+1)*target_samples]
+                S, M = preprocess_clip(clip, sr, n_fft, hop_length, n_mels)
+                print(f"  • {wav}: clip {i+1}/{n_full} processed, shape {S.shape}")
+                mel_clips.append(S)
+                mfcc_clips.append(M)
 
-                # Save original (non-resampled) if within first 5 clips
-                # if i < 5:
-                #     y_original, original_sr = librosa.load(path, sr=None)
-                #     original_clip = y_original[int(start * (original_sr / sr)) : int(end * (original_sr / sr))]
-                #     sf.write(os.path.join(comparison_dir, f"{base}_orig_clip{i}.wav"), original_clip, original_sr)
-                #     sf.write(os.path.join(comparison_dir, f"{base}_down_clip{i}.wav"), clip, sr)
+        # helper to stack & save one file per folder
+        def stack_and_save(arr_list, folder):
+            if not arr_list:
+                print(f"  • no clips in {folder}, skipping")
+                return
+            ref_shape = arr_list[0].shape
+            for arr in arr_list:
+                if arr.shape != ref_shape:
+                    raise ValueError(f"Shape mismatch in {folder}: {arr.shape} vs {ref_shape}")
+            stacked = np.stack(arr_list, axis=0)  # shape (N, H, W)
+            out_path = os.path.join(folder, 'stacked.npy')
+            np.save(out_path, stacked)
+            print(f"  • {folder}: saved stacked.npy with shape {stacked.shape}")
 
-                S_db, mfcc_norm = preprocess_clip(clip, sr, n_fft, hop_length, n_mels)
-                np.save(os.path.join(mel_out, f"{base}_clip{i}.npy"), S_db)
-                np.save(os.path.join(mfcc_out, f"{base}_clip{i}.npy"), mfcc_norm)
+        # replace per‐clip .npy files with these two stacked outputs
+        stack_and_save(mel_clips,  mel_out)
+        stack_and_save(mfcc_clips, mfcc_out)
 
-            # Collect leftover
-            rem = y_trim[n_full*target_samples:]
-            if rem.size > 0:
-                leftovers.append((base, rem))
 
         # Concatenate and process leftovers (optional, still commented out)
         # if leftovers:
@@ -124,7 +130,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Preprocess .wav files "
                                                  "and save features")
     parser.add_argument("directory", help="Path to folder with .wav files")
-    parser.add_argument("output_dir", help="Folder to save generated .npy files")
+    parser.add_argument("output_dir", help="Folder to save generated .npy files (ignored, output will be placed in input subfolders)")
     parser.add_argument("--n_mels", type=int, default=DEFAULT_N_MELS,
                         help="Number of Mel filter banks")
     parser.add_argument("--duration", type=float, default=DEFAULT_DURATION,
@@ -132,6 +138,6 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     process_directory(args.directory, args.output_dir,
-                      n_mels=args.n_mels, target_duration=args.duration)
+                      n_mels=args.n_mels, duration=args.duration)
 
-    print("Preprocessing complete. Saved features to:", args.output_dir)
+    print("Preprocessing complete. Saved features to subfolders of:")

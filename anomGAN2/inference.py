@@ -15,86 +15,123 @@ import matplotlib.pyplot as plt
 # -----------------------------------------------------------------------------
 #  Dataset: benign classes under real_data_root; anomalies under anomaly_data_dir
 # -----------------------------------------------------------------------------
+from torch.utils.data import Dataset
+import os
+import numpy as np
+
 class RealFakeDirDataset(Dataset):
-    def __init__(self, real_data_root, anomaly_data_dir, use_mel, use_mfcc, max_samples_per_class=None):
+    def __init__(self,
+                 real_data_root,
+                 anomaly_data_dir,
+                 use_mel,
+                 use_mfcc,
+                 max_samples_per_class=None,
+                 cache_in_ram=False):
         if not (use_mel or use_mfcc):
-            raise ValueError("Need at least one of --use_mel or --use_mfcc")
+            raise ValueError("Need at least one of use_mel or use_mfcc")
 
+        self.cache_in_ram = cache_in_ram
+        # samples will be tuples: (path, idx, label, is_stacked)
         self.samples = []
+        self.cached_data = []
 
-        # 1) REAL (label=0): walk each class-folder under real_data_root
+        # helper to collect samples from one folder
+        def collect_samples(base_dir, label):
+            stacked_path = os.path.join(base_dir, "stacked.npy")
+            if os.path.isfile(stacked_path):
+                arr = np.load(stacked_path, mmap_mode="r")
+                if arr.ndim != 3:
+                    raise ValueError(f"{stacked_path} must be 3D, got {arr.shape}")
+                n = arr.shape[0]
+                for i in range(n):
+                    self.samples.append((stacked_path, i, label, True))
+                return
+
+            # fallback to mel/ + mfcc/ dirs
+            mel_dir = os.path.join(base_dir, "mel") if use_mel else None
+            mfcc_dir = os.path.join(base_dir, "mfcc") if use_mfcc else None
+
+            if use_mel and not os.path.isdir(mel_dir):
+                raise FileNotFoundError(f"Missing mel/ under {base_dir}")
+            if use_mfcc and not os.path.isdir(mfcc_dir):
+                raise FileNotFoundError(f"Missing mfcc/ under {base_dir}")
+
+            # pick filenames from the channel you know exists
+            file_list = sorted(os.listdir(mel_dir or mfcc_dir))
+            if max_samples_per_class:
+                import random
+                random.shuffle(file_list)
+                file_list = file_list[:max_samples_per_class]
+
+            for fn in file_list:
+                if not fn.endswith(".npy"):
+                    continue
+                m = os.path.join(mel_dir, fn) if use_mel else None
+                f = os.path.join(mfcc_dir, fn) if use_mfcc else None
+                if use_mel and use_mfcc and not os.path.exists(f):
+                    raise FileNotFoundError(f"{f} missing")
+                # is_stacked = False, idx is ignored
+                self.samples.append(((m, f), None, label, False))
+
+        # 1) REAL subclasses under real_data_root
         classes = sorted(
             d for d in os.listdir(real_data_root)
             if os.path.isdir(os.path.join(real_data_root, d))
         )
         if not classes:
-            raise ValueError(f"No subfolders found in {real_data_root}")
-
-        samples_per_benign = max_samples_per_class // len(classes) if max_samples_per_class else None
-
+            raise ValueError(f"No subfolders in {real_data_root}")
+        per_class = (max_samples_per_class // len(classes)) if max_samples_per_class else None
         for cls in classes:
-            base = os.path.join(real_data_root, cls)
-            mel_dir  = os.path.join(base, 'mel')  if use_mel  else None
-            mfcc_dir = os.path.join(base, 'mfcc') if use_mfcc else None
+            collect_samples(os.path.join(real_data_root, cls), label=0)
 
-            if use_mel  and not os.path.isdir(mel_dir):
-                raise FileNotFoundError(f"Missing mel/ under {base}")
-            if use_mfcc and not os.path.isdir(mfcc_dir):
-                raise FileNotFoundError(f"Missing mfcc/ under {base}")
-
-            # list filenames from the first available channel
-            file_list = sorted(os.listdir(mel_dir if use_mel else mfcc_dir))
-            if samples_per_benign:
-                import random
-                random.shuffle(file_list)
-                file_list = file_list[:samples_per_benign]
-            for fn in file_list:
-                if not fn.endswith('.npy'):
-                    continue
-                m = os.path.join(mel_dir, fn)  if use_mel  else None
-                f = os.path.join(mfcc_dir, fn) if use_mfcc else None
-                if use_mel and use_mfcc and not os.path.exists(f):
-                    raise FileNotFoundError(f"{f} missing")
-                self.samples.append((m, f, 0))
-
-        # 2) ANOMALY (label=1): single folder anomaly_data_dir
-        mel_dir  = os.path.join(anomaly_data_dir, 'mel')  if use_mel  else None
-        mfcc_dir = os.path.join(anomaly_data_dir, 'mfcc') if use_mfcc else None
-
-        if use_mel  and not os.path.isdir(mel_dir):
-            raise FileNotFoundError(f"Missing mel/ under {anomaly_data_dir}")
-        if use_mfcc and not os.path.isdir(mfcc_dir):
-            raise FileNotFoundError(f"Missing mfcc/ under {anomaly_data_dir}")
-
-        file_list = sorted(os.listdir(mel_dir if use_mel else mfcc_dir))
-        if max_samples_per_class:
-            import random
-            random.shuffle(file_list)
-            file_list = file_list[:max_samples_per_class]
-        for fn in file_list:
-            if not fn.endswith('.npy'):
-                continue
-            m = os.path.join(mel_dir, fn)  if use_mel  else None
-            f = os.path.join(mfcc_dir, fn) if use_mfcc else None
-            if use_mel and use_mfcc and not os.path.exists(f):
-                raise FileNotFoundError(f"{f} missing")
-            self.samples.append((m, f, 1))
+        # 2) ANOMALY folder
+        collect_samples(anomaly_data_dir, label=1)
 
         if not self.samples:
             raise ValueError("No samples found for real or anomaly!")
 
+        # 3) Optionally cache in RAM
+        if self.cache_in_ram:
+            for entry in self.samples:
+                path_or_pair, idx, label, is_stacked = entry
+                if is_stacked:
+                    arr = np.load(path_or_pair)
+                    frame = arr[idx]               # shape H×W
+                    x = frame[np.newaxis, ...]     # shape 1×H×W
+                else:
+                    m, f = path_or_pair
+                    feats = []
+                    if m:
+                        feats.append(np.load(m))
+                    if f:
+                        feats.append(np.load(f))
+                    x = np.stack(feats, axis=0)    # shape C×H×W
+                self.cached_data.append((x.astype(np.float32), label))
+
     def __len__(self):
         return len(self.samples)
 
-    def __getitem__(self, idx):
-        m, f, label = self.samples[idx]
-        feats = []
-        if m:
-            feats.append(np.load(m))
-        if f:
-            feats.append(np.load(f))
-        x = np.stack(feats, axis=0)    # shape = [C, H, W], C=1 or 2
-        return torch.from_numpy(x).float(), label
+    def __getitem__(self, i):
+        if self.cache_in_ram:
+            x, label = self.cached_data[i]
+            return torch.from_numpy(x), label
+
+        path_or_pair, idx, label, is_stacked = self.samples[i]
+
+        if is_stacked:
+            arr = np.load(path_or_pair)
+            frame = arr[idx]                   # H×W
+            x = frame[np.newaxis, ...]         # 1×H×W
+        else:
+            m, f = path_or_pair
+            feats = []
+            if m:
+                feats.append(np.load(m))
+            if f:
+                feats.append(np.load(f))
+            x = np.stack(feats, axis=0)        # C×H×W
+
+        return torch.from_numpy(x.astype(np.float32)), label
 
 # -----------------------------------------------------------------------------
 #  Utility: count model parameters

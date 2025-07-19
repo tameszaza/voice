@@ -4,67 +4,91 @@ merge_features.py
 
 Scan a root directory containing multiple model subdirectories,
 each of which may have 'mel' and/or 'mfcc' subfolders, and
-merge all their files into two consolidated folders:
+merge all their .npy files into two single stacked files:
 
-    <output_dir>/mel
-    <output_dir>/mfcc
+    <output_dir>/mel/stacked.npy
+    <output_dir>/mfcc/stacked.npy
 
-Files are copied (not moved).  If two models have the same
-filename, the script will rename them as
-    <model_name>_<original_filename>
-so nothing gets silently overwritten.
+Each of those will be a single 3-D array of shape (N, H, W),
+where N is the total number of slices across all models.
 """
 
 import os
-import shutil
 import argparse
+import numpy as np
 
-def merge_feature_folder(root_dir: str, output_dir: str, feature: str):
+def merge_and_stack(root_dir: str, output_dir: str, feature: str):
     """
-    Merge all files from each <root_dir>/<model>/<feature>
-    folder into <output_dir>/<feature>.
+    Walk every <root_dir>/<model>/<feature> folder, load all .npy data
+    (including any pre-existing stacked.npy), concatenate into one array,
+    and save as <output_dir>/<feature>/stacked.npy.
     """
-    dest = os.path.join(output_dir, feature)
-    os.makedirs(dest, exist_ok=True)
+    dest_folder = os.path.join(output_dir, feature)
+    os.makedirs(dest_folder, exist_ok=True)
 
-    for model_name in os.listdir(root_dir):
-        model_path = os.path.join(root_dir, model_name)
-        feat_path = os.path.join(model_path, feature)
-
-        if not os.path.isdir(feat_path):
-            # skip models that do not have this feature folder
-            continue
-
-        for fname in os.listdir(feat_path):
-            src = os.path.join(feat_path, fname)
-            if not os.path.isfile(src):
+    all_arrays = []
+    with os.scandir(root_dir) as models:
+        for model_entry in models:
+            if not model_entry.is_dir():
+                continue
+            feat_path = os.path.join(model_entry.path, feature)
+            if not os.path.isdir(feat_path):
                 continue
 
-            # prefix with model name to avoid collisions
-            dst_name = f"{model_name}_{fname}"
-            dst = os.path.join(dest, dst_name)
+            # 1) If a pre-stacked file exists, load its entire array
+            stacked_file = os.path.join(feat_path, "stacked.npy")
+            if os.path.isfile(stacked_file):
+                arr = np.load(stacked_file, mmap_mode="r")
+                if arr.ndim != 3:
+                    raise ValueError(f"{stacked_file} must be 3D, got {arr.shape}")
+                all_arrays.append(arr)
+                print(f"Loaded stacked from {stacked_file} with shape {arr.shape}")
+                continue
 
-            shutil.copy2(src, dst)
-            print(f"copied {src} → {dst}")
+            # 2) Otherwise, load every individual .npy as a 2D slice
+            with os.scandir(feat_path) as files:
+                for file_entry in files:
+                    if not file_entry.name.endswith(".npy"):
+                        continue
+                    arr = np.load(file_entry.path)
+                    if arr.ndim != 2:
+                        raise ValueError(f"{file_entry.path} must be 2D, got {arr.shape}")
+                    # promote to 3D with leading axis
+                    all_arrays.append(arr[np.newaxis, ...])
+                    print(f"Loaded slice {file_entry.path} with shape {arr.shape}")
+
+    if not all_arrays:
+        print(f"No data found under any '{feature}' folder in {root_dir}.")
+        return
+
+    # concatenate along first axis
+    stacked = np.concatenate(all_arrays, axis=0)  # shape (N, H, W)
+    out_path = os.path.join(dest_folder, "stacked.npy")
+    np.save(out_path, stacked)
+    print(f"\nSaved merged stacked array for '{feature}' with shape {stacked.shape} → {out_path}\n")
+
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Merge 'mel' and 'mfcc' folders from multiple models"
+        description="Merge 'mel' and 'mfcc' features from multiple models "
+                    "into single stacked .npy files."
     )
     parser.add_argument(
         "root_dir",
-        help="Path to the directory that contains your model subdirectories"
+        help="Directory containing model subdirectories"
     )
     parser.add_argument(
         "output_dir",
-        help="Path where merged 'mel' and 'mfcc' folders will be created"
+        help="Directory where you want mel/stacked.npy and mfcc/stacked.npy"
     )
     args = parser.parse_args()
 
-    # merge mel files
-    merge_feature_folder(args.root_dir, args.output_dir, "mel")
-    # merge mfcc files
-    merge_feature_folder(args.root_dir, args.output_dir, "mfcc")
+    # Merge & stack mel
+    merge_and_stack(args.root_dir, args.output_dir, "mel")
+
+    # Merge & stack mfcc
+    merge_and_stack(args.root_dir, args.output_dir, "mfcc")
+
 
 if __name__ == "__main__":
     main()
