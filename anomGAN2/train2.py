@@ -58,13 +58,33 @@ def load_saved_models(G, E, D, C, weights_dir, epoch, opt_D=None, opt_Gs=None, o
 #  Dataset: each subfolder under data_root is a class.
 #  Inside each, there are 'mel/' and/or 'mfcc/' subfolders.
 # -----------------------------------------------------------------------------
+import os
+import numpy as np
+import torch
+from torch.utils.data import Dataset
 
-class MultiFeatureDirectoryDataset(Dataset):
-    def __init__(self, data_root, use_mel=True, use_mfcc=True):
+class StackedOnlyDataset(Dataset):
+    """
+    Assumes under data_root/<class> you have:
+        mel/stacked.npy    of shape (N_i, H, W)   if use_mel
+        mfcc/stacked.npy   of shape (N_i, H, W)   if use_mfcc
+
+    This class:
+    1) Scans all classes, loads each stacked.npy exactly once.
+    2) Builds two big arrays:
+         - full_data: (N_total, C, H, W)  float32
+         - full_labels: (N_total,)         int64
+    3) Optionally converts full_data to a single torch.Tensor.
+    """
+
+    def __init__(self,
+                 data_root: str,
+                 use_mel: bool = True,
+                 use_mfcc: bool = True,
+                 preload: bool = True):
         if not (use_mel or use_mfcc):
             raise ValueError("At least one of use_mel or use_mfcc must be True")
 
-        # scan class folders
         classes = sorted(
             d for d in os.listdir(data_root)
             if os.path.isdir(os.path.join(data_root, d))
@@ -72,90 +92,59 @@ class MultiFeatureDirectoryDataset(Dataset):
         if not classes:
             raise ValueError(f"No subfolders in {data_root}")
 
-        # each sample is (path_pair, idx, label, is_stacked)
-        self.samples = []
+        data_list = []
+        label_list = []
+
         for label, cls in enumerate(classes):
             base = os.path.join(data_root, cls)
+            arrs = []
 
-            # check for stacked.npy in mel/ and mfcc/
-            mel_stack  = os.path.join(base, "mel",  "stacked.npy") if use_mel  else None
-            mfcc_stack = os.path.join(base, "mfcc", "stacked.npy") if use_mfcc else None
+            if use_mel:
+                mel_path = os.path.join(base, "mel", "stacked.npy")
+                if not os.path.isfile(mel_path):
+                    raise FileNotFoundError(f"Missing {mel_path}")
+                arr_m = np.load(mel_path)       # shape: (N_i, H, W)
+                arrs.append(arr_m)
 
-            if (mel_stack and os.path.isfile(mel_stack)) or \
-               (mfcc_stack and os.path.isfile(mfcc_stack)):
+            if use_mfcc:
+                mfcc_path = os.path.join(base, "mfcc", "stacked.npy")
+                if not os.path.isfile(mfcc_path):
+                    raise FileNotFoundError(f"Missing {mfcc_path}")
+                arr_f = np.load(mfcc_path)     # shape: (N_i, H, W)
+                arrs.append(arr_f)
 
-                # load lengths without fully loading into RAM
-                arr_m = np.load(mel_stack,  mmap_mode="r") if mel_stack and os.path.isfile(mel_stack)   else None
-                arr_f = np.load(mfcc_stack, mmap_mode="r") if mfcc_stack and os.path.isfile(mfcc_stack) else None
+            # stack channels → (N_i, C, H, W)
+            x_cls = np.stack(arrs, axis=1).astype(np.float32)
+            n_i = x_cls.shape[0]
 
-                # sanity-check dims
-                if arr_m is not None and arr_m.ndim != 3:
-                    raise ValueError(f"{mel_stack} must be 3D, got {arr_m.shape}")
-                if arr_f is not None and arr_f.ndim != 3:
-                    raise ValueError(f"{mfcc_stack} must be 3D, got {arr_f.shape}")
+            data_list.append(x_cls)
+            label_list.append(np.full((n_i,), label, dtype=np.int64))
 
-                n = (arr_m.shape[0] if arr_m is not None else arr_f.shape[0])
-                for i in range(n):
-                    self.samples.append(((mel_stack, mfcc_stack), i, label, True))
-                continue
+        # concatenate across classes → (N_total, C, H, W) & (N_total,)
+        full_data   = np.concatenate(data_list,  axis=0)
+        full_labels = np.concatenate(label_list, axis=0)
 
-            # fallback to per-file under mel/ and mfcc/
-            mel_dir  = os.path.join(base, 'mel')  if use_mel  else None
-            mfcc_dir = os.path.join(base, 'mfcc') if use_mfcc else None
-
-            if use_mel and not os.path.isdir(mel_dir):
-                raise FileNotFoundError(f"Missing mel/ under {base}")
-            if use_mfcc and not os.path.isdir(mfcc_dir):
-                raise FileNotFoundError(f"Missing mfcc/ under {base}")
-
-            fnames = sorted(os.listdir(mel_dir if use_mel else mfcc_dir))
-            for fn in fnames:
-                if not fn.endswith('.npy'):
-                    continue
-                m_path = os.path.join(mel_dir, fn)  if use_mel  else None
-                f_path = os.path.join(mfcc_dir, fn) if use_mfcc else None
-                if use_mel and use_mfcc and not os.path.exists(f_path):
-                    raise FileNotFoundError(f"{f_path} missing")
-                # idx is ignored in per-file mode
-                self.samples.append(((m_path, f_path), None, label, False))
-
-        if not self.samples:
-            raise ValueError("No samples found!")
-
-        # cache for __getitem__
-        self._cache = [None] * len(self.samples)
+        if preload:
+            # one big tensor in RAM
+            self.data   = torch.from_numpy(full_data)
+            self.labels = torch.from_numpy(full_labels)
+        else:
+            # keep numpy around, convert per-sample
+            self.data   = full_data
+            self.labels = full_labels
 
     def __len__(self):
-        return len(self.samples)
+        return self.labels.shape[0]
 
     def __getitem__(self, idx):
-        # return cached if available
-        if self._cache[idx] is not None:
-            return self._cache[idx]
+        if isinstance(self.data, torch.Tensor):
+            # very fast: single tensor & label lookup
+            return self.data[idx], self.labels[idx]
 
-        path_pair, slice_idx, label, is_stacked = self.samples[idx]
-        mel_path, mfcc_path = path_pair
-        feats = []
-
-        if is_stacked:
-            # load only the needed slice
-            if mel_path and os.path.isfile(mel_path):
-                arr_m = np.load(mel_path, mmap_mode="r")
-                feats.append(arr_m[slice_idx])
-            if mfcc_path and os.path.isfile(mfcc_path):
-                arr_f = np.load(mfcc_path, mmap_mode="r")
-                feats.append(arr_f[slice_idx])
-        else:
-            # per-file
-            if mel_path:
-                feats.append(np.load(mel_path))
-            if mfcc_path:
-                feats.append(np.load(mfcc_path))
-
-        x = np.stack(feats, axis=0).astype(np.float32)  # [C,H,W]
-        tensor = (torch.from_numpy(x), label)
-        self._cache[idx] = tensor
-        return tensor
+        # numpy fallback: one slice + conversion
+        sample = self.data[idx]            # shape (C, H, W), float32
+        label  = int(self.labels[idx])
+        return torch.from_numpy(sample), label
 
 
 # -----------------------------------------------------------------------------
@@ -223,7 +212,7 @@ def train(args):
         start_epoch = config.get('resume_epoch', 0)
 
     # dataset & loader
-    ds = MultiFeatureDirectoryDataset(
+    ds = StackedOnlyDataset(
         args.data_root, use_mel=args.use_mel, use_mfcc=args.use_mfcc
     )
     x0, _ = ds[0]

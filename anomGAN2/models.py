@@ -152,7 +152,9 @@ class Classifier(nn.Module):
     def __init__(self, in_channels, n_clusters):
         super().__init__()
         self.conv = nn.Conv2d(in_channels, 128, kernel_size=5, stride=2, padding=2)
-        self.bn   = nn.BatchNorm2d(128)
+        # no running‐stat updates during gen/backward
+        self.bn   = nn.BatchNorm2d(128, affine=True, track_running_stats=False)
+
         self.act  = nn.LeakyReLU(0.2, inplace=False)
         self.pool = nn.AdaptiveAvgPool2d(1)
         self.fc   = nn.Linear(128, n_clusters)

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import os
 import sys
 import glob
@@ -7,17 +6,21 @@ import argparse
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, DistributedSampler
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
+import torch.distributed as dist
+import torch.multiprocessing as mp
+
 
 from models import MultiGenerator, MultiEncoder, Discriminator, Classifier, Bandit
 
-from torch.utils.data import Dataset
 import os
 import numpy as np
 import torch
+from torch.utils.data import Dataset
 
-class RealOnlyMultiFeatureDataset(Dataset):
+class StackedOnlyDataset(Dataset):
     def __init__(self,
                  real_data_root: str,
                  use_mel: bool = True,
@@ -26,15 +29,10 @@ class RealOnlyMultiFeatureDataset(Dataset):
         if not (use_mel or use_mfcc):
             raise ValueError("Need at least one of use_mel or use_mfcc")
 
-        self.use_mel = use_mel
-        self.use_mfcc = use_mfcc
-        self.cache_in_ram = cache_in_ram
-        # each entry is (path_pair, idx, is_stacked)
-        # where path_pair is either (mel_path, mfcc_path) or (stacked_mel, stacked_mfcc)
-        self.samples = []
-        self.cached_data = []
+        self.cache = cache_in_ram
+        self.data = []
 
-        # find each class subfolder
+        # scan class folders
         classes = sorted(
             d for d in os.listdir(real_data_root)
             if os.path.isdir(os.path.join(real_data_root, d))
@@ -42,109 +40,52 @@ class RealOnlyMultiFeatureDataset(Dataset):
         if not classes:
             raise ValueError(f"No subfolders in {real_data_root}")
 
+        # load each class’s stacked files and concatenate
+        all_arrays = []
         for cls in classes:
             base = os.path.join(real_data_root, cls)
+            mel_path  = os.path.join(base, "mel",  "stacked.npy") if use_mel  else None
+            mfcc_path = os.path.join(base, "mfcc", "stacked.npy") if use_mfcc else None
 
-            # per-channel stacked paths
-            mel_stack  = os.path.join(base, "mel",  "stacked.npy") if use_mel  else None
-            mfcc_stack = os.path.join(base, "mfcc", "stacked.npy") if use_mfcc else None
+            if use_mel and not os.path.isfile(mel_path):
+                raise FileNotFoundError(f"Missing {mel_path}")
+            if use_mfcc and not os.path.isfile(mfcc_path):
+                raise FileNotFoundError(f"Missing {mfcc_path}")
 
-            # if either stacked file exists, load lengths and register slices
-            if (mel_stack and os.path.isfile(mel_stack)) or \
-               (mfcc_stack and os.path.isfile(mfcc_stack)):
+            # load both arrays fully (or memmap if you prefer)
+            arrs = []
+            if use_mel:
+                arr_m = np.load(mel_path)   # shape: (N_i, H, W)
+                arrs.append(arr_m)
+            if use_mfcc:
+                arr_f = np.load(mfcc_path)
+                arrs.append(arr_f)
 
-                # memory‐map to avoid loading whole thing at once
-                arr_m = np.load(mel_stack,  mmap_mode="r") if mel_stack and os.path.isfile(mel_stack)   else None
-                arr_f = np.load(mfcc_stack, mmap_mode="r") if mfcc_stack and os.path.isfile(mfcc_stack) else None
+            # stack channels → shape (N_i, C, H, W)
+            x_cls = np.stack(arrs, axis=1).astype(np.float32)
+            all_arrays.append(x_cls)
 
-                # sanity check
-                if arr_m is not None and arr_m.ndim != 3:
-                    raise ValueError(f"{mel_stack} must be 3D, got {arr_m.shape}")
-                if arr_f is not None and arr_f.ndim != 3:
-                    raise ValueError(f"{mfcc_stack} must be 3D, got {arr_f.shape}")
-
-                # number of samples = first dim
-                count = arr_m.shape[0] if arr_m is not None else arr_f.shape[0]
-                for i in range(count):
-                    self.samples.append(((mel_stack, mfcc_stack), i, True))
-                continue
-
-            # fallback to per-file .npy under mel/ and mfcc/
-            mel_dir  = os.path.join(base, "mel")  if use_mel  else None
-            mfcc_dir = os.path.join(base, "mfcc") if use_mfcc else None
-
-            if use_mel  and not os.path.isdir(mel_dir):
-                raise FileNotFoundError(f"Missing mel/ under {base}")
-            if use_mfcc and not os.path.isdir(mfcc_dir):
-                raise FileNotFoundError(f"Missing mfcc/ under {base}")
-
-            file_list = sorted(os.listdir(mel_dir if use_mel else mfcc_dir))
-            for fn in file_list:
-                if not fn.endswith(".npy"):
-                    continue
-                m_path = os.path.join(mel_dir, fn)  if use_mel  else None
-                f_path = os.path.join(mfcc_dir, fn) if use_mfcc else None
-                if use_mel and use_mfcc and not os.path.exists(f_path):
-                    raise FileNotFoundError(f"{f_path} missing")
-                # idx ignored for per-file mode
-                self.samples.append(((m_path, f_path), None, False))
-
-        if not self.samples:
-            raise ValueError("No real samples found!")
-
-        # optionally cache all data in RAM
-        if self.cache_in_ram:
-            for path_pair, idx, is_stacked in self.samples:
-                m_pair, f_pair = path_pair
-                feats = []
-
-                if is_stacked:
-                    # load stacked arrays and index
-                    mel_s, mfcc_s = m_pair, f_pair
-                    if mel_s and os.path.isfile(mel_s):
-                        arr_m = np.load(mel_s, mmap_mode="r")
-                        feats.append(arr_m[idx])
-                    if mfcc_s and os.path.isfile(mfcc_s):
-                        arr_f = np.load(mfcc_s, mmap_mode="r")
-                        feats.append(arr_f[idx])
-                else:
-                    # per-file
-                    m_path, f_path = path_pair
-                    if m_path is not None:
-                        feats.append(np.load(m_path))
-                    if f_path is not None:
-                        feats.append(np.load(f_path))
-
-                x = np.stack(feats, axis=0).astype(np.float32)  # C×H×W
-                self.cached_data.append(torch.from_numpy(x))
+        # concatenate all classes → shape (N_total, C, H, W)
+        full = np.concatenate(all_arrays, axis=0)
+        if self.cache:
+            # convert once to a single tensor
+            self.data = torch.from_numpy(full)
+        else:
+            # keep numpy array around for on‑the‑fly slicing
+            self.data = full
 
     def __len__(self):
-        return len(self.samples)
+        return self.data.shape[0]
 
-    def __getitem__(self, i: int):
-        if self.cache_in_ram:
-            return self.cached_data[i]
-
-        path_pair, idx, is_stacked = self.samples[i]
-        feats = []
-
-        if is_stacked:
-            mel_s, mfcc_s = path_pair
-            if mel_s and os.path.isfile(mel_s):
-                arr_m = np.load(mel_s)
-                feats.append(arr_m[idx])
-            if mfcc_s and os.path.isfile(mfcc_s):
-                arr_f = np.load(mfcc_s)
-                feats.append(arr_f[idx])
+    def __getitem__(self, idx):
+        if self.cache:
+            # just a tensor index → very fast
+            return self.data[idx]
         else:
-            m_path, f_path = path_pair
-            if m_path is not None:
-                feats.append(np.load(m_path))
-            if f_path is not None:
-                feats.append(np.load(f_path))
+            # numpy slice + torch conversion
+            sample = self.data[idx]          # shape (C, H, W)
+            return torch.from_numpy(sample)
 
-        x = np.stack(feats, axis=0).astype(np.float32)
-        return torch.from_numpy(x)
 
 
 
@@ -198,130 +139,191 @@ def find_latest_interrupt(log_dir):
     return best_epoch, best_paths
 
 
+# ------------------ Training Loop ------------------
 def train_xzx(args):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    ds = RealOnlyMultiFeatureDataset(
+    rank       = args.rank
+    world_size = args.world_size
+    import torch
+    from torch.utils.data import DataLoader
+    from torch.utils.data.distributed import DistributedSampler
+
+    # set device for this rank
+    device = torch.device(f"cuda:{args.rank}" if torch.cuda.is_available() else "cpu")
+    torch.cuda.set_device(device)
+
+    # build your dataset
+    ds = StackedOnlyDataset(
         args.real_data_root,
         use_mel=args.use_mel,
         use_mfcc=args.use_mfcc,
         cache_in_ram=args.cache_in_ram
     )
+
+
+    # exactly like the bug‑free code:
+    sampler = DistributedSampler(
+        ds,
+        num_replicas=args.world_size,
+        rank=args.rank,
+        shuffle=True
+    )
+    loader = DataLoader(
+        ds,
+        batch_size=args.batch_size,
+        sampler=sampler,
+        drop_last=True,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=2,
+    )
+
+
+    # load pretrained models
     x0 = ds[0]
     n_features, H, W = x0.shape
-
-    loader = DataLoader(ds, batch_size=args.batch_size,
-                        shuffle=True, drop_last=True)
     G, E, D, C, B = load_models(args, device, n_features, H, W)
 
+    # wrap encoder E for DDP
+    E = DDP(E, device_ids=[rank], output_device=rank)
+
+    # optimizer for each sub-encoder
     opt_Es = [
         torch.optim.Adam(enc.parameters(), lr=args.lr, betas=(0.5, 0.9))
-        for enc in E.encoders
+        for enc in E.module.encoders
     ]
 
-
-    # check for existing interrupt checkpoint
+    # resume logic
     start_epoch = 1
     latest_ep, paths = find_latest_interrupt(args.log_dir)
     if latest_ep > 0 and os.path.exists(paths[1]):
-        print(f"Resuming from interrupted epoch {latest_ep}")
-        E.load_state_dict(torch.load(paths[0], map_location=device))
-        # if you saved per-cluster optimizer states you could loop here to restore them
+        if rank == 0:
+            print(f"Resuming from interrupted epoch {latest_ep}")
+        E.module.load_state_dict(torch.load(paths[0], map_location=device))
         start_epoch = latest_ep + 1
 
-    writer = SummaryWriter(os.path.join(args.log_dir, "xzx"))
+    # tensorboard only on rank0
+    writer = None
+    if rank == 0:
+        tb_dir = os.path.join(args.log_dir, "xzx_ddp")
+        writer = SummaryWriter(tb_dir)
+
     step = (start_epoch - 1) * len(loader)
 
     try:
         for epoch in range(start_epoch, args.epochs + 1):
+            sampler.set_epoch(epoch)
             running = 0.0
             for x in loader:
-                x = x.to(device)
+                x = x.to(device, non_blocking=True)
                 with torch.no_grad():
                     feat_real = D.intermediate(x)
                     k_pred    = C(feat_real).argmax(dim=1)
 
-                # forward through all
+                # forward
                 z_hat = E(x, k_pred)
                 x_hat = G(z_hat, k_pred, target_hw=(H, W))
 
-                # now per-cluster reconstruction losses, but defer backward
-                cluster_losses = []
+                # per-cluster loss
+                losses = []
                 for i in torch.unique(k_pred):
-                    idx      = (k_pred == i).nonzero(as_tuple=False).view(-1)
-                    x_i      = x[idx]
-                    x_hat_i  = x_hat[idx]
-                    cluster_losses.append(
-                        F.mse_loss(x_hat_i, x_i)
-                    )
+                    idx = (k_pred == i).nonzero(as_tuple=True)[0]
+                    losses.append(F.mse_loss(x_hat[idx], x[idx]))
+                total_e_loss = sum(losses)
 
-                # sum into one scalar
-                total_e_loss = sum(cluster_losses)
-
-                # zero grads for every sub-encoder
+                # zero grads
                 for opt in opt_Es:
                     opt.zero_grad()
-
-                # single backward pass
                 total_e_loss.backward()
-
-                # step every sub-encoder
                 for opt in opt_Es:
                     opt.step()
 
-                # log once per batch
-                writer.add_scalar("Loss/E_xzx", total_e_loss.item(), step)
+                if rank == 0:
+                    writer.add_scalar("Loss/E_xzx_ddp", total_e_loss.item(), step)
                 running += total_e_loss.item()
                 step += 1
 
-            avg = running / len(loader)
-            print(f"[xzx] Epoch {epoch}/{args.epochs}  Loss={avg:.4f}")
+            if rank == 0:
+                avg = running / len(loader)
+                print(f"[xzx-ddp] Epoch {epoch}/{args.epochs}  Loss={avg:.4f}")
+              
+                if epoch % args.save_every == 0:
+                    # save encoder
+                    torch.save(
+                        E.state_dict(),
+                        os.path.join(args.log_dir, f"E_xzx_{epoch}.pt")
+                    )
+                    # save each sub‐encoder's optimizer state
+                    for i, opt in enumerate(opt_Es):
+                        torch.save(
+                            opt.state_dict(),
+                            os.path.join(args.log_dir, f"opt_E_xzx_{i}.pt")
+                        )
 
-            if epoch % args.save_every == 0:
-                torch.save(E.state_dict(),
-                           os.path.join(args.log_dir, f"E_xzx_{epoch}.pt"))
 
     except KeyboardInterrupt:
-        print(f"Interrupted at epoch {epoch}. Saving encoder and optimizer.")
-        torch.save(E.state_dict(),
-                   os.path.join(args.log_dir, f"E_xzx_{epoch}_interrupt.pt"))
-        for i, opt in enumerate(opt_Es):
-            torch.save(opt.state_dict(),
-                       os.path.join(args.log_dir, f"opt_E_{i}_xzx_{epoch}_interrupt.pt"))
-        writer.close()
+        if rank == 0:
+            print(f"Interrupted at epoch {epoch}. Saving encoder and optimizer.")
+            torch.save(
+                E.module.state_dict(),
+                os.path.join(args.log_dir, f"E_xzx_{epoch}_interrupt.pt")
+            )
         sys.exit(0)
 
-    # normal finish
-    torch.save(E.state_dict(),
-               os.path.join(args.log_dir, "E_xzx_final.pt"))
-    for i, opt in enumerate(opt_Es):
-        torch.save(opt.state_dict(),
-                    os.path.join(args.log_dir, f"opt_E_{i}_xzx_final_.pt"))
-    writer.close()
+    # final save
+    if rank == 0:
+        torch.save(
+            E.module.state_dict(),
+            os.path.join(args.log_dir, "E_xzx_final.pt")
+        )
+        writer.close()
 
+# ------------------ DDP Worker ------------------
+def ddp_worker(rank, world_size, args):
+    import os
+    import torch.distributed as dist
 
-if __name__ == "__main__":
-    p = argparse.ArgumentParser(
-        description="Phase-2 x–z–x Training on multi-folder real data"
+    os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
+    os.environ.setdefault("MASTER_PORT", "29500")
+    dist.init_process_group(
+        backend="nccl",
+        init_method="env://",
+        rank=rank,
+        world_size=world_size,
     )
-    p.add_argument("--real_data_root", required=True,
-                   help="Root with subfolders for each real class (each has mel/, mfcc/)")
-    p.add_argument("--log_dir",       required=True,
-                   help="Phase-1 checkpoints + where to save xzx snapshots")
-    p.add_argument("--ckpt_suffix",   required=True,
-                   help="Suffix for G_*.pt, E_*.pt, etc. from phase-1")
+
+    args.rank = rank
+    args.world_size = world_size
+    train_xzx(args)                    # call the unified train function
+    dist.destroy_process_group()
+
+
+# ------------------ Main ------------------
+if __name__ == "__main__":
+    p = argparse.ArgumentParser()
+    p.add_argument("--real_data_root", required=True)
+    p.add_argument("--log_dir",       required=True)
+    p.add_argument("--ckpt_suffix",   required=True)
     p.add_argument("--batch_size",    type=int, default=256)
     p.add_argument("--epochs",        type=int, default=5000)
     p.add_argument("--lr",            type=float, default=1e-3)
-    p.add_argument("--save_every",    type=int,   default=10)
-    p.add_argument("--z_dim",         type=int,   default=128)
-    p.add_argument("--n_clusters",    type=int,   default=7)
-    p.add_argument("--use_mel",       action="store_true",
-                   help="Include mel channel")
-    p.add_argument("--use_mfcc",      action="store_true",
-                   help="Include mfcc channel")
-    p.add_argument("--cache_in_ram",  action="store_true",
-                   help="Cache all data in RAM for faster I/O")
+    p.add_argument("--save_every",    type=int, default=10)
+    p.add_argument("--z_dim",         type=int, default=128)
+    p.add_argument("--n_clusters",    type=int, default=7)
+    p.add_argument("--use_mel",       action="store_true")
+    p.add_argument("--use_mfcc",      action="store_true")
+    p.add_argument("--cache_in_ram",  action="store_true")
+    p.add_argument("--num_workers",   type=int, default=4)
     args = p.parse_args()
-
     os.makedirs(args.log_dir, exist_ok=True)
-    train_xzx(args)
+
+    world_size = torch.cuda.device_count()
+    if world_size < 1:
+        raise RuntimeError("No CUDA devices found!")
+
+    mp.spawn(
+        ddp_worker,
+        args=(world_size, args),
+        nprocs=world_size,
+        join=True
+    )
