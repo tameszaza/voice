@@ -15,13 +15,18 @@ from loss import (
     LossWeights,
 )
 from evaluate import evaluate
+import tempfile
 
-# -----------------------------------------------------------------------------
-#  helpers
-# -----------------------------------------------------------------------------
-# ─────────────────────────────────────────────────────────────
-#  (put this anywhere near the top of the file, after imports)
-# ─────────────────────────────────────────────────────────────
+def save_atomic(checkpoint: dict, final_path: str):
+    # 1) Write to a temp file in the same dirsectory
+    dirpath, fname = os.path.split(final_path)
+    with tempfile.NamedTemporaryFile(dir=dirpath, delete=False) as tmp:
+        tmp_path = tmp.name
+        torch.save(checkpoint, tmp_path)
+    # 2) Atomically replace
+    os.replace(tmp_path, final_path)
+
+
 def _load_if_given(model: nn.Module, ckpt_path: str | None, *, name: str):
     """
     If `ckpt_path` is not None/empty and the file exists, load it into `model`.
@@ -77,6 +82,25 @@ class BaseModel:
             self.gt.resize_(y.size()).copy_(y)
         if self.fixed_input is None:
             self.fixed_input = self.input.clone()
+    def load(self, ckpt_path: str, strict: bool = True):
+        """
+        Load networks (and optimizers, if present) from a full checkpoint.
+        If strict=False, missing/unexpected keys in state_dicts are ignored.
+        """
+        if not os.path.isfile(ckpt_path):
+            raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+
+        ckpt = torch.load(ckpt_path, map_location="cpu")
+        # load generator + discriminator weights
+        self.netg.load_state_dict(ckpt['netG'], strict=strict)
+        self.netd.load_state_dict(ckpt['netD'], strict=strict)
+        print(f"[Load] netG/netD weights loaded from {ckpt_path} (strict={strict})")
+
+        # if optimizer states are in the checkpoint, load them too
+        if 'optimG' in ckpt and 'optimD' in ckpt:
+            self.optimizer_g.load_state_dict(ckpt['optimG'])
+            self.optimizer_d.load_state_dict(ckpt['optimD'])
+            print(f"[Load] optimizer states loaded from {ckpt_path}")
 
 # -----------------------------------------------------------------------------
 #  RES_Ganomaly model
@@ -102,7 +126,7 @@ class RES_Ganomaly(BaseModel):
         self.optimizer_d = optim.Adam(self.netd.parameters(), lr=opt.lr, betas=(beta1, 0.999))
         self.optimizer_g = optim.Adam(self.netg.parameters(), lr=opt.lr, betas=(beta1, 0.999))
 
-        self.lambda_gp = getattr(opt, "lambda_gp", 1.0)  # paper’s best λ
+        self.lambda_gp = getattr(opt, "lambda_gp", 10.0)  # paper’s best λ
         self.n_critic = getattr(opt, "n_critic", 1)      # match Algorithm‑1 exactly
         self.loss_weights = LossWeights(
             w_adv=getattr(opt, "w_adv", 1.0),
@@ -131,8 +155,13 @@ class RES_Ganomaly(BaseModel):
         d_fake_logits, _ = self.netd(x_recon)       # stop grads to G
 
         gp_val = gradient_penalty(
-            self.netd, x_recon.detach(), self.device, self.lambda_gp
+            self.netd,
+            self.input,              # real batch X
+            x_recon.detach(),        # fake batch X′
+            self.device,             # device
+            self.lambda_gp           # λ
         )
+
 
         d_real_prob = torch.sigmoid(d_real_logits)
         d_fake_prob = torch.sigmoid(d_fake_logits)
@@ -256,6 +285,19 @@ class RES_Ganomaly(BaseModel):
 
         self.writer.close()
         
+    def _verify_checkpoint(self, path: str) -> bool:
+        try:
+            ckpt = torch.load(path, map_location="cpu")
+            tmp_g = NetG_RES_GANomaly(self.opt).cpu()
+            tmp_d = NetD_RES_GANomaly(self.opt).cpu()
+            tmp_g.load_state_dict(ckpt['netG'])
+            tmp_d.load_state_dict(ckpt['netD'])
+            print(f"[Verify] Checkpoint loaded OK: {path}")
+            return True
+        except Exception as e:
+            print(f"[Verify] Failed to load checkpoint: {e}")
+            return False
+        
         
     def train_periodic_save(self):
         """
@@ -288,14 +330,24 @@ class RES_Ganomaly(BaseModel):
                     print(f"[Periodic Save] Epoch {epoch+1:3d} — saved light ckpt '{tag}'")
 
         except KeyboardInterrupt:
-            # On CTRL+C, save full checkpoint (nets + optimizers) at current epoch
+            # On CTRL+C: build full checkpoint dict, save atomically, then verify
             print(f"\n[Interrupt] CTRL+C caught — saving full checkpoint at epoch {self.epoch+1}")
-            self.save(f"interrupt_epoch{self.epoch+1}")
+            ckpt_dir = os.path.join(self.opt.outf, self.opt.name, "checkpoints")
+            os.makedirs(ckpt_dir, exist_ok=True)
+            ckpt = {
+                'epoch':  self.epoch,
+                'netG':   self.netg.state_dict(),
+                'netD':   self.netd.state_dict(),
+                'optimG': self.optimizer_g.state_dict(),
+                'optimD': self.optimizer_d.state_dict(),
+            }
+            final_path = os.path.join(ckpt_dir, f"checkpoint_interrupt_epoch{self.epoch+1}.pth")
+            save_atomic(ckpt, final_path)
+            self._verify_checkpoint(final_path)
             sys.exit(0)
-
         finally:
-            # Always close the TensorBoard writer
             self.writer.close()
+
     # --------------------------------------------------------------
     #  evaluation – ROC‑AUC
     # --------------------------------------------------------------
