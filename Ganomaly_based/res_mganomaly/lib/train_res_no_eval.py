@@ -5,44 +5,56 @@ torch_import = True
 import torch
 from torch.utils.data import Dataset, DataLoader
 
-from RES_GANomaly_model import RES_Ganomaly
+from RES_GANomaly_model import RES_MGanomaly
 # Enables detailed gradient anomaly detection if needed
 #torch.autograd.set_detect_anomaly(True)
 
 
-# --------------------------------------------------------------------------
-# Dataset
-# --------------------------------------------------------------------------
-# --------------------------------------------------------------------------
-# Dataset that reads ONE aggregated .npy file
-# --------------------------------------------------------------------------
-
-class AggregatedLogMelDataset(Dataset):
+# ─────────────────────────────────────────────────────────────────────
+# Dataset that handles EITHER
+#   • a single .npy file            (old behaviour)
+#   • a directory full of *.npy     (cluster1.npy, cluster2.npy, …)
+#     and returns (X, k) where k = cluster index ∈ {0,1,…}
+# ─────────────────────────────────────────────────────────────────────
+class ClusteredLogMelDataset(Dataset):
     """
-    Loads a single .npy file shaped (N, C, H, W) **once** and
-    serves individual tensors on demand. Requires H == W == 2^n.
+    * If `path` is a file  → behaves exactly like the old loader, returns (x,)
+    * If `path` is a dir   → loads every *.npy once, concatenates,
+                              and returns (x, k) where k is the file index.
+    All arrays must be shaped (N, C, H, W) with square power-of-two H = W.
     """
-    def __init__(self, npy_path: str):
-        arr = np.load(npy_path).astype(np.float32)  # (N,C,H,W)
 
-        if arr.ndim != 4:
-            raise ValueError(f"Expected 4D array, got shape {arr.shape}")
+    def __init__(self, path: str):
+        files = [path] if os.path.isfile(path) else \
+                sorted(f for f in os.listdir(path) if f.endswith(".npy"))
+        if not files:
+            raise FileNotFoundError(f"No .npy files found in '{path}'")
 
-        N, C, H, W = arr.shape
-        if H != W or H <= 0 or (H & (H - 1)) != 0:
-            raise ValueError(
-                f"Unexpected spatial dimensions {H}×{W}; "
-                "both must be equal and a power of two (e.g. 32,64,128…)")
+        self.data   = []
+        self.labels = []           # cluster indices, used as branch_idx  k
+        for k, fname in enumerate(files):
+            npy_path = fname if os.path.isabs(fname) else os.path.join(path, fname)
+            arr = np.load(npy_path).astype(np.float32)  # (N,C,H,W)
 
-        self.data = torch.from_numpy(arr)  # shared memory, no extra copy
-        del arr  # free the NumPy array
+            if arr.ndim != 4:
+                raise ValueError(f"{fname}: expected 4-D array, got {arr.shape}")
+            N, C, H, W = arr.shape
+            if H != W or H & (H - 1):
+                raise ValueError(f"{fname}: H=W must be a power of 2; got {H}×{W}")
 
-    def __len__(self):
-        return self.data.size(0)
+            self.data.append(torch.from_numpy(arr))       # share memory
+            self.labels.append(torch.full((N,), k, dtype=torch.long))
+            print(f"[Dataset] loaded {fname:>15}: {N} samples  →  branch {k}")
+
+        self.data   = torch.cat(self.data,   dim=0)        # (ΣN, C, H, W)
+        self.labels = torch.cat(self.labels, dim=0)        # (ΣN,)
+
+    def __len__(self):  return self.data.size(0)
 
     def __getitem__(self, idx):
-        # returns a 1-tuple for compatibility with your training loop
-        return (self.data[idx],)                         # keep tuple form
+        x = self.data[idx]
+        k = self.labels[idx] if self.labels.numel() else None
+        return (x, k) if k is not None else (x,)
 
 # --------------------------------------------------------------------------
 # CLI Parser
@@ -52,19 +64,24 @@ def build_option_parser():
         "RES-GANomaly simple trainer",
         fromfile_prefix_chars='@'
     )
-    p.add_argument("--data_file", type=str,
-                   default="ResData/ASV64/train/real.npy",
-                   help="Path to aggregated .npy file shaped (N,C,128,128)")
+    p.add_argument("--data_path", type=str,
+                default="ResData/wavefake32_split/train/fake",
+                help="Either a .npy file or a directory of cluster*.npy")
     #p.add_argument("--data_root", type=str, default="ResData")
-    p.add_argument("--outf", type=str, default="output_vanillaResGAN")
-    p.add_argument("--name", type=str, default="ASV64")
-    p.add_argument("--batchsize", type=int, default=256)
-    p.add_argument("--isize", type=int, default=64)
+    p.add_argument("--outf", type=str, default="output_ResMGAN")
+    p.add_argument("--name", type=str, default="Fi64z100")
+    p.add_argument("--n_branches", type=int, default=None,
+               help="Number of decoder branches; "
+                    "if omitted and data_path is a dir, auto-infers.")
+    p.add_argument("--batchsize", type=int, default=1024)
+    p.add_argument("--isize", type=int, default=32)
     p.add_argument("--nc", type=int, default=1)
     p.add_argument("--nz", type=int, default=100)
     p.add_argument("--ngf", type=int, default=64)
     p.add_argument("--ndf", type=int, default=128)
-    p.add_argument("--lr", type=float, default=1e-3)
+    p.add_argument("--lr_g", type=float, default=1e-3)
+    p.add_argument("--lr_d", type=float, default=1e-3)
+    p.add_argument("--lr_cls", type=float, default=1e-3)
     p.add_argument("--niter", type=int, default=3000)
     p.add_argument("--device", type=str, default="cuda:0")
     p.add_argument("--ngpu",      type=int, default=1, help="Number of GPUs to use (for DataParallel)")
@@ -84,7 +101,7 @@ def build_option_parser():
     #                help="Path to a pretrained generator (.pth).")
     # p.add_argument("--netd_ckpt", type=str, default="output_vanillaResGAN/ResGanNormRerun/checkpoints/netD_epoch100.pth",
     #                help="Path to a pretrained discriminator (.pth).")
-    p.add_argument("--resume", type=str, default="output_vanillaResGAN/ASV64/checkpoints/checkpoint_epoch1920.pth",
+    p.add_argument("--resume", type=str, default=None,
                    help="Checkpoint tag to resume from, e.g. 'latest' or 'epoch20'.")
     return p
 
@@ -99,6 +116,7 @@ def _resolve_ckpt_path(opt, tag: str) -> str:
     ckpt_dir = os.path.join(opt.outf, opt.name, "checkpoints")
     return os.path.join(ckpt_dir, f"checkpoint_{tag}.pth")
 
+
 # --------------------------------------------------------------------------
 # Main
 # --------------------------------------------------------------------------
@@ -106,7 +124,13 @@ def main():
     opt = build_option_parser().parse_args()
 
     # --------------- only training loader ----------------
-    train_ds = AggregatedLogMelDataset(opt.data_file)
+    # NEW
+    train_ds = ClusteredLogMelDataset(opt.data_path)
+    if opt.n_branches is None:
+        max_k = int(train_ds.labels.max().item()) if hasattr(train_ds, "labels") else 0
+        opt.n_branches = max_k + 1
+        print(f"[Init] Auto-set n_branches = {opt.n_branches}")
+
     train_loader = DataLoader(
         train_ds,
         batch_size=opt.batchsize,
@@ -117,7 +141,7 @@ def main():
     dataloader = {"train": train_loader}
 
     # --------------- model  ----------------
-    model = RES_Ganomaly(opt, dataloader)
+    model = RES_MGanomaly(opt, dataloader)
     if opt.resume:
         ckpt_path = _resolve_ckpt_path(opt, opt.resume)
         try:
@@ -125,7 +149,6 @@ def main():
         except FileNotFoundError as e:
             print(f"[!] Resume failed: {e}.  Starting from scratch.")
 
-    # uses train_periodic_save to skip evaluation and save every 10 epochs
     model.train_periodic_save()
 
 

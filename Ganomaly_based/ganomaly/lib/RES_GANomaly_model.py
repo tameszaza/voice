@@ -63,7 +63,7 @@ class BaseModel:
         self.opt = opt
         self.dataloader = dataloader
         self.device = torch.device("cpu" if opt.device == "cpu" or not torch.cuda.is_available() else opt.device)
-
+        self.epoch = 0
         self.input = torch.empty(1, opt.nc, opt.isize, opt.isize, device=self.device)
         self.gt = torch.empty(1, dtype=torch.long, device=self.device)
         self.fixed_input = None
@@ -101,6 +101,10 @@ class BaseModel:
             self.optimizer_g.load_state_dict(ckpt['optimG'])
             self.optimizer_d.load_state_dict(ckpt['optimD'])
             print(f"[Load] optimizer states loaded from {ckpt_path}")
+        if 'epoch' in ckpt:
+            self.epoch = ckpt['epoch'] + 1   # resume *after* the saved epoch # keep internal counter consistent
+            print(f"[Load] Will resume from epoch {self.epoch}")
+
 
 # -----------------------------------------------------------------------------
 #  RES_Ganomaly model
@@ -266,7 +270,7 @@ class RES_Ganomaly(BaseModel):
     # --------------------------------------------------------------
     def train(self):
         best_auc = 0.0
-        for self.epoch in range(self.opt.niter):
+        for self.epoch in range(self.epoch, self.opt.niter):
             self.train_one_epoch()
 
             # ← debug print every 10 epochs
@@ -308,7 +312,7 @@ class RES_Ganomaly(BaseModel):
         On CTRL+C, do a full save (including optimizers) at the current epoch.
         """
         try:
-            for epoch in range(self.opt.niter):
+            for epoch in range(self.epoch, self.opt.niter):
                 self.epoch = epoch
                 self.train_one_epoch()
 

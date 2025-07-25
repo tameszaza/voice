@@ -24,62 +24,43 @@ def weights_init(mod):
 class SELayer(nn.Module):
     def __init__(self, channel, reduction=16):
         super(SELayer, self).__init__()
-        self.avg_pool = nn.AdaptiveAvgPool2d(1) # Squeeze
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.excite = nn.Sequential(
             nn.Linear(channel, channel // reduction, bias=True), 
             nn.ReLU(inplace=False),
-            # Your printout had bias=False for the second linear, so I'll match that.
-            # If the paper or source intended True, you can change it back.
             nn.Linear(channel // reduction, channel, bias=True), 
             nn.Sigmoid()
         ) # Excitation
 
     def forward(self, x):
         batch_size, num_channels, _, _ = x.size() # b, c from your code
-        
-        # Squeeze
-        squeezed_tensor = self.avg_pool(x) # Shape: (batch_size, num_channels, 1, 1)
-        
-        # Reshape for FC layers: from (b, c, 1, 1) to (b, c)
+        squeezed_tensor = self.avg_pool(x) 
         reshaped_for_excite = squeezed_tensor.view(batch_size, num_channels)
-        
-        # Excitation: self.excite expects (b, c) and outputs (b, c)
         channel_weights = self.excite(reshaped_for_excite)
-        
-        # Reshape weights back for scaling: from (b, c) to (b, c, 1, 1)
         reshaped_weights_for_scaling = channel_weights.view(batch_size, num_channels, 1, 1)
-        
-        # Scale original features
         scaled_features = x * reshaped_weights_for_scaling.expand_as(x)
         return scaled_features
 
 class ResidualSEBlock(nn.Module):
     def __init__(self, channels, reduction=16):
         super(ResidualSEBlock, self).__init__()
-        # first 3×3 conv
         self.conv1 = nn.Conv2d(channels, channels,
                                kernel_size=3, stride=1, padding=1, bias=False)
         self.bn1   = nn.BatchNorm2d(channels)
-        self.relu  = nn.ReLU(inplace=False)
-        # second 3×3 conv
+        self.relu  = nn.LeakyReLU(0.2, inplace=False)
         self.conv2 = nn.Conv2d(channels, channels,
                                kernel_size=3, stride=1, padding=1, bias=False)
         self.bn2   = nn.BatchNorm2d(channels)
-        # squeeze-and-excitation on the **input** X
         self.se    = SELayer(channels, reduction)
 
     def forward(self, x):
         identity = x
-        # 1) SE‐recalibrate the input
         out = self.se(x)
-        # 2) first conv→BN→ReLU
         out = self.conv1(out)
         out = self.bn1(out)
         out = self.relu(out)
-        # 3) second conv→BN
         out = self.conv2(out)
         out = self.bn2(out)
-        # 4) add skip
         out = out + identity
         return out
 
@@ -102,24 +83,15 @@ class Encoder_RES_GANomaly(nn.Module):
 
         current_channels = ngf
         current_isize = isize // 2
-
-        # Number of further downsampling stages needed to reach 4x4 spatial size
-        # Example: if isize=128, current_isize=64. To get from 64 to 4: 64->32, 32->16, 16->8, 8->4 (4 stages)
         num_pyramid_stages = int(math.log2(current_isize / 4))
 
         for i in range(num_pyramid_stages):
             in_feat = current_channels
-            # Double channels, but cap at 1024 as per Figure 4 (e.g., 512 -> 1024)
             out_feat = min(current_channels * 2, 1024) 
-            
-            # Downsampling Block (Conv + BN + LReLU)
-            # This corresponds to the "Conv2d" labels in Figure 4's main path
             main.add_module(f'pyramid-{i}-conv-{in_feat}to{out_feat}',
                             nn.Conv2d(in_feat, out_feat, kernel_size=4, stride=2, padding=1, bias=False))
             main.add_module(f'pyramid-{i}-bn-{out_feat}', nn.BatchNorm2d(out_feat))
             main.add_module(f'pyramid-{i}-lrelu-{out_feat}', nn.LeakyReLU(0.2, inplace=False))
-            
-            # Add ResidualSEBlock after downsampling, operating at 'out_feat' channels
             main.add_module(f'pyramid-{i}-resblock-{out_feat}', ResidualSEBlock(out_feat))
             
             current_channels = out_feat
@@ -132,7 +104,7 @@ class Encoder_RES_GANomaly(nn.Module):
 
         self.main = main
 
-    def forward(self, input_tensor): # Renamed from 'input' to avoid shadowing built-in
+    def forward(self, input_tensor):
         if self.ngpu > 1 and input_tensor.device.type == 'cuda':
             output = nn.parallel.data_parallel(self.main, input_tensor, range(self.ngpu))
         else:
@@ -174,14 +146,6 @@ class SelfAttention(nn.Module):
     
 class Decoder_RES_GANomaly(nn.Module):
     def __init__(self, isize, nz, nc, ngf_deepest, ngpu=0):
-        """
-        Decoder for RES-GANomaly, based on Figure 5 and text.
-        isize: target output image size (e.g., 128)
-        nz: size of latent z vector (e.g., 100)
-        nc: number of channels in output image (e.g., 1 for grayscale)
-        ngf_deepest: number of filters at the deepest part of the decoder (e.g., 1024 at 4x4 stage)
-        ngpu: number of GPUs
-        """
         super(Decoder_RES_GANomaly, self).__init__()
         self.ngpu = ngpu
         self.isize = isize # Target output size
@@ -231,11 +195,6 @@ class Decoder_RES_GANomaly(nn.Module):
         return output
 
 class NetD_RES_GANomaly(nn.Module):
-    """
-    Multi-scale discriminator for RES-GANomaly.
-    All conv layers: kernel_size=5, stride=2, padding=2, no BatchNorm.
-    Activation: LeakyReLU(0.2).
-    """
     def __init__(self, opt):
         super(NetD_RES_GANomaly, self).__init__()
         self.ngpu    = opt.ngpu
@@ -320,53 +279,106 @@ class NetG_RES_GANomaly(nn.Module):
         gen_imag = self.decoder(latent_i)
         latent_o = self.encoder2(gen_imag)
         return gen_imag, latent_i, latent_o
-
-class NetG_Multi_RES_GANomaly(nn.Module):
-    """
-    G = Encoder₁  →  {Decoder_j}_{j=1..k}  →  Encoder₂
-        • k independent decoders
-        • shared encoders
-    """
-    def __init__(self, opt):
+    
+    
+class NetG_MultiDecoder_RES_GANomaly(nn.Module):
+    def __init__(self, opt, n_branches: int):
         super().__init__()
-        self.k = opt.num_generators
-        _isize, _ngf, _nc, _nz, _ngpu = (
-            opt.isize, opt.ngf, opt.nc, opt.nz, opt.ngpu
+        if n_branches < 1:
+            raise ValueError("n_branches must be ≥ 1")
+
+        self.opt         = opt
+        self.n_branches  = n_branches
+        _isize, _nc      = opt.isize, opt.nc
+        _ngf, _nz        = opt.ngf,  opt.nz
+        _ngpu            = opt.ngpu
+        
+        self.encoder = Encoder_RES_GANomaly(
+            isize=_isize, nz=_nz, nc=_nc,
+            ngf=_ngf, ngpu=_ngpu, add_final_conv=True
         )
 
-        # ---------- shared encoders --------------------------------------
-        self.enc1 = Encoder_RES_GANomaly(_isize, _nz, _nc, _ngf, _ngpu)
-        self.enc2 = Encoder_RES_GANomaly(_isize, _nz, _nc, _ngf, _ngpu)
-
-        # figure out deepest channel count once
         with torch.no_grad():
             dummy = torch.randn(1, _nc, _isize, _isize)
-            deepest = self.enc1(dummy).size(1)
+            deepest_c = self.encoder(dummy).size(1)
 
-        # ---------- k independent decoders --------------------------------
-        self.decoders = nn.ModuleList(
-            [
-                Decoder_RES_GANomaly(
-                    isize=_isize, nz=_nz, nc=_nc,
-                    ngf_deepest=deepest, ngpu=_ngpu
-                )
-                for _ in range(self.k)
-            ]
+        self.decoders = nn.ModuleList([
+            Decoder_RES_GANomaly(
+                isize=_isize, nz=_nz, nc=_nc,
+                ngf_deepest=deepest_c, ngpu=_ngpu
+            )
+            for _ in range(n_branches)
+        ])
+
+        # Optional: weight init just once for everything you added
+        self.apply(weights_init)
+
+    # --------------------------------------------------------------------------
+    def forward(self, x, branch_idx: int):
+        if isinstance(branch_idx, torch.Tensor):
+            if branch_idx.dim() != 1 or branch_idx.size(0) != x.size(0):
+                raise ValueError("branch_idx tensor must be shape (batch,)")
+        else:
+            branch_idx = torch.full(
+                (x.size(0),), int(branch_idx),
+                dtype=torch.long, device=x.device
+            )
+
+        z = self.encoder(x)
+        if torch.all(branch_idx == branch_idx[0]):
+            x_hat = self.decoders[int(branch_idx[0])](z)
+        else:
+            # heterogeneous mini-batch – slice and stitch manually
+            outs = []
+            for k in range(self.n_branches):
+                mask = (branch_idx == k)
+                if mask.any():
+                    outs.append(self.decoders[k](z[mask]))
+            # Stitch back together in original order
+            x_hat = torch.zeros_like(x)
+            cur = 0
+            for k in range(self.n_branches):
+                mask = (branch_idx == k)
+                n    = mask.sum()
+                if n > 0:
+                    x_hat[mask] = outs[cur]
+                    cur += 1
+
+        z_hat = self.encoder(x_hat)         # same encoder reused
+        return x_hat, z, z_hat
+
+    # --------------------------------------------------------------------------
+    def reconstruct_all(self, x):
+        """
+        Utility used at *test* time: reconstruct with **every** decoder and
+        return a list so you can pick the best reconstruction manually.
+        Returns:  list length n_branches with tensors shaped like x
+        """
+        z = self.encoder(x)
+        return [dec(z) for dec in self.decoders]
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Branch classifier  C(Dᵢ(x̂))  ─────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+class BranchClassifier(nn.Module):
+    """
+    A 1×1 conv + flatten that turns the discriminator’s feature map (B, C, 4, 4)
+    into logits over branches.  The input channel count must match the last
+    channel size produced by NetD_RES_GANomaly.features_extractor.
+    """
+    def __init__(self, feat_channels: int, n_branches: int):
+        super().__init__()
+        self.classifier = nn.Sequential(
+            nn.Conv2d(feat_channels, n_branches,
+                      kernel_size=1, stride=1, bias=False),
+            nn.Flatten(start_dim=1)
         )
+        self.apply(weights_init)
 
-    # single-decoder forward (training)
-    def forward_one(self, x, j:int):
-        z_i   = self.enc1(x)
-        x_hat = self.decoders[j](z_i)
-        z_o   = self.enc2(x_hat)
-        return x_hat, z_i, z_o
+    def forward(self, feats):
+        """
+        feats : tensor (B, C_feat, H, W)  from NetD_RES_GANomaly
+        returns logits (B, n_branches)
+        """
+        return self.classifier(feats)
 
-    # all-decoder forward (inference)
-    def forward_all(self, x):
-        z_i = self.enc1(x)
-        x_hats, z_os = [], []
-        for dec in self.decoders:
-            x_hat = dec(z_i)
-            x_hats.append(x_hat)
-            z_os.append(self.enc2(x_hat))
-        return x_hats, z_i, z_os

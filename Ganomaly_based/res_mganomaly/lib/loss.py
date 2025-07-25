@@ -14,6 +14,7 @@ class LossWeights:
     w_adv: float = 1.0
     w_con: float = 50.0
     w_enc: float = 1.0
+    w_cls: float = 1.0
 
 
 # --------------------------------------------------------------------------
@@ -57,7 +58,21 @@ def latent_consistency_loss(z: torch.Tensor,
     diff = (z - z_recon).view(z.size(0), -1)  # flatten per sample
     return torch.norm(diff, p=2, dim=1).mean()
 
+def classifier_loss_danogan(logits: torch.Tensor,
+                            target_idx: torch.Tensor) -> torch.Tensor:
+    """
+    The auxiliary classifier behaves exactly like D-AnoGAN (§3.3):
+        ℒ_cls = CE(logits, k)     (ordinary cross-entropy)
+    • `logits`  – shape (B, n_branches)  from BranchClassifier
+    • `target_idx` – LongTensor (B,)  with ground-truth branch indices k
+    """
+    return F.cross_entropy(logits, target_idx)
 
+
+# --------------------------------------------------------------------------
+#  UPDATED: add to the weights container
+# --------------------------------------------------------------------------
+from dataclasses import dataclass
 
 
 def generator_total_loss(d_real_logits: torch.Tensor,
