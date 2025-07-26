@@ -100,7 +100,9 @@ def parse_args():
     p.add_argument("--ndf",        type=int)
     p.add_argument("--n_branches", type=int,
                    help="number of decoders in the generator")
-
+    
+    p.add_argument("--extra_res", type=int, default=0,
+               help="Extra ResidualSEBlocks per down/upsampling stage")
     return p.parse_args()
 
 
@@ -111,7 +113,7 @@ def build_model(args, ckpt: dict, device: torch.device):
     """
     # ── retrieve essential hyper-parameters ──────────────────────────
     src = ckpt.get("opt", vars(args))
-    need = ["isize", "nc", "nz", "ngf", "ndf"]
+    need = ["isize", "nc", "nz", "ngf", "ndf", "extra_res"]
     miss = [k for k in need if src.get(k) is None]
     if miss:
         raise ValueError("Missing architecture args: " + ", ".join(miss))
@@ -123,7 +125,7 @@ def build_model(args, ckpt: dict, device: torch.device):
     o.isize        = int(src["isize"]);  o.nc   = int(src["nc"])
     o.nz           = int(src["nz"]);     o.ngf  = int(src["ngf"])
     o.ndf          = int(src["ndf"]);    o.ngpu = 0
-    o.n_branches   = n_br
+    o.n_branches   = n_br;               o.extra_res = int(src["extra_res"])
 
     # ── instantiate nets ────────────────────────────────────────────
     netG = NetG_MultiDecoder_RES_GANomaly(o, n_br).to(device)
@@ -214,80 +216,95 @@ def best_f1_acc(y, scores):
 
 
 # ─────────────────────────────────────────────────────────────
-def main():
+def main() -> None:
+    # ─── CLI & misc ────────────────────────────────────────────
     args   = parse_args()
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     os.makedirs(args.out_dir, exist_ok=True)
+    out    = Path(args.out_dir)
 
-    # ---- data --------------------------------------------------
+    # ─── data ──────────────────────────────────────────────────
     ds = RealFakeDataset(args.data_path, bona_name=args.bona_class)
     loader = DataLoader(ds, batch_size=args.batch, shuffle=False,
                         num_workers=4, pin_memory=True)
     print(f"[Eval] dataset size: {len(ds)}  (bona={args.bona_class})")
 
-    # ---- model -------------------------------------------------
-    ckpt   = torch.load(args.ckpt, map_location="cpu")
+    # ─── model  ------------------------------------------------
+    ckpt = torch.load(args.ckpt, map_location="cpu")
     netG, netD, clf = build_model(args, ckpt, device)
 
-    # ---- inference --------------------------------------------
+    # ─── inference --------------------------------------------
     scores, k_used, y_true = infer_scores(netG, netD, clf, loader, device)
 
-    auc = skm.roc_auc_score(y_true, scores)
+    # ─── scalar metrics ---------------------------------------
+    auc                     = skm.roc_auc_score(y_true, scores)
     thr_f1, best_f1, thr_acc, best_acc = best_f1_acc(y_true, scores)
-    print(f"[Eval] AUC={auc:.4f} | best-F1={best_f1:.3f}@{thr_f1:.4f} "
+    print(f"[Eval]  AUC={auc:.4f} | best-F1={best_f1:.3f}@{thr_f1:.4f} "
           f"| best-ACC={best_acc:.3f}@{thr_acc:.4f}")
 
-    # ------------------------------------------------------------
-    # PLOTS
-    # ------------------------------------------------------------
-    out = Path(args.out_dir)
+    # ─── 1) score histogram (percentile 0‒80, density) --------
+    order  = np.argsort(scores)
+    ranks  = np.empty_like(order);  ranks[order] = np.arange(len(scores))
+    perc   = ranks / (len(scores) - 1) * 100.                     # 0‒100 %
 
-    # 1) score histogram
+    # convert score thresholds → percentile domain
+    thr_f1_pct  = 100.0 * (scores <= thr_f1 ).mean()
+    thr_acc_pct = 100.0 * (scores <= thr_acc).mean()
+
     plt.figure()
-    plt.hist(scores[y_true==0], 100, alpha=.6, label="bona-fide")
-    plt.hist(scores[y_true==1], 100, alpha=.6, label="anomaly")
-    plt.axvline(thr_f1,  color="k", ls="--", label="thr_F1")
-    plt.axvline(thr_acc, color="r", ls="--", label="thr_ACC")
-    plt.xlabel("anomaly score"); plt.ylabel("count"); plt.legend()
-    plt.title("Score distribution")
-    plt.savefig(out / "score_hist.png", dpi=150)
+    plt.hist(perc[y_true == 0], bins=80, range=(0, 90),
+             density=True, alpha=.6, label="bona-fide")
+    plt.hist(perc[y_true == 1], bins=80, range=(0, 90),
+             density=True, alpha=.6, label="anomaly")
+    plt.axvline(thr_f1_pct,  color="k", ls="--", label="thr F1")
+    plt.axvline(thr_acc_pct, color="r", ls="--", label="thr ACC")
+    plt.xlim(0, 80)
+    plt.xlabel("score percentile (0‒80)");  plt.ylabel("density");  plt.legend()
+    plt.title("Score distribution (percentile space)")
+    plt.tight_layout();  plt.savefig(out / "score_hist.png", dpi=150);  plt.close()
 
-    # 2) decoder usage (overall + per class)
-    def _bar(data, title, fname):
+    # ─── 2) decoder-usage bar charts ---------------------------
+    def _bar(data: np.ndarray, title: str, fname: str) -> None:
         uniq, cnt = np.unique(data, return_counts=True)
-        plt.figure(); plt.bar(uniq, cnt); plt.xlabel("decoder id"); plt.ylabel("count")
-        plt.title(title); plt.savefig(out / fname, dpi=150)
-    _bar(k_used,                "Decoder usage (all)",          "decoder_usage_all.png")
-    _bar(k_used[y_true==0],     "Decoder usage (bona-fide)",    "decoder_usage_bona.png")
-    _bar(k_used[y_true==1],     "Decoder usage (anomaly)",      "decoder_usage_anom.png")
+        plt.figure();  plt.bar(uniq, cnt)
+        plt.xlabel("decoder id");  plt.ylabel("count");  plt.title(title)
+        plt.tight_layout();  plt.savefig(out / fname, dpi=150);  plt.close()
 
-    # 3) recon examples (N couples per class)
+    _bar(k_used,                 "Decoder usage (all)",       "decoder_usage_all.png")
+    _bar(k_used[y_true == 0],    "Decoder usage (bona-fide)", "decoder_usage_bona.png")
+    _bar(k_used[y_true == 1],    "Decoder usage (anomaly)",   "decoder_usage_anom.png")
+
+    # ─── 3) reconstruction pairs  (separate PNGs) --------------
     n = args.n_vis
-    idx_bona = np.random.choice(np.where(y_true==0)[0], n, replace=False)
-    idx_anom = np.random.choice(np.where(y_true==1)[0], n, replace=False)
-    vis_idx  = np.concatenate([idx_bona, idx_anom])
-    x_vis    = ds.x[vis_idx].to(device)
-    k_vis    = k_used[vis_idx]
-    with torch.no_grad():
-        z_vis = netG.encoder(x_vis)
-        x_hat = torch.empty_like(x_vis)
-        for i,k in enumerate(k_vis):
-            k_int = int(k) % len(netG.decoders)  
-            x_hat[i] = netG.decoders[int(k)](z_vis[i:i+1])[0]
-    plt.figure(figsize=(4, 2*n))
-    for i in range(2*n):
-        plt.subplot(2*n,2,2*i+1); plt.imshow(x_vis[i,0].cpu(), cmap="magma"); plt.axis("off")
-        plt.subplot(2*n,2,2*i+2); plt.imshow(x_hat[i,0].cpu(), cmap="magma"); plt.axis("off")
-    plt.suptitle(f"{n} bona-fide (top) + {n} anomaly (bottom) : original vs recon")
-    plt.savefig(out / "recon_pairs.png", dpi=150)
+    rng = np.random.default_rng()
+    idx_bona = rng.choice(np.where(y_true == 0)[0], n, replace=False)
+    idx_anom = rng.choice(np.where(y_true == 1)[0], n, replace=False)
 
-    # 4) raw metrics JSON
-    metrics = dict(auc=auc, best_f1=float(best_f1), thr_f1=float(thr_f1),
+    for cnt, idx in enumerate(np.concatenate([idx_bona, idx_anom])):
+        lbl      = "bona" if y_true[idx] == 0 else "anom"
+        x_vis    = ds.x[idx:idx+1].to(device)
+        k_vis    = int(k_used[idx]) % len(netG.decoders)     # safe index wrap
+
+        with torch.no_grad():
+            z_vis   = netG.encoder(x_vis)
+            x_hat   = netG.decoders[k_vis](z_vis)[0].cpu()
+
+        plt.figure(figsize=(4, 2))
+        plt.subplot(1, 2, 1);  plt.imshow(x_vis[0, 0].cpu(), cmap="magma"); plt.axis("off"); plt.title("orig")
+        plt.subplot(1, 2, 2);  plt.imshow(x_hat[0],        cmap="magma");   plt.axis("off"); plt.title("recon")
+        plt.suptitle(f"{lbl.upper()} • decoder {k_vis}")
+        fname = out / f"recon_{lbl}_{cnt}.png"
+        plt.tight_layout();  plt.savefig(fname, dpi=150);  plt.close()
+
+    # ─── 4) save raw metrics -----------------------------------
+    metrics = dict(auc=float(auc),
+                   best_f1=float(best_f1), thr_f1=float(thr_f1),
                    best_acc=float(best_acc), thr_acc=float(thr_acc))
-    with open(out / "metrics.json", "w") as f:
-        json.dump(metrics, f, indent=2)
+    with open(out / "metrics.json", "w") as fp:
+        json.dump(metrics, fp, indent=2)
 
-    print(f"[Eval] plots + metrics saved to  {out.absolute()}")
+    print(f"[Eval] metrics + figures saved to  {out.resolve()}")
+
 
 
 if __name__ == "__main__":

@@ -65,11 +65,11 @@ class ResidualSEBlock(nn.Module):
         return out
 
 class Encoder_RES_GANomaly(nn.Module):
-    def __init__(self, isize, nz, nc, ngf, ngpu, add_final_conv=True):
+    def __init__(self, isize, nz, nc, ngf, ngpu, add_final_conv=True, extra_res: int = 0):
         super(Encoder_RES_GANomaly, self).__init__()
         self.ngpu = ngpu
         self.add_final_conv = add_final_conv
-
+        self.extra_res = extra_res
         if not (isize > 0 and (isize & (isize - 1) == 0) and isize >= 4):
             raise ValueError("isize has to be a power of 2 and >= 4, e.g., 32, 64, 128")
 
@@ -93,6 +93,8 @@ class Encoder_RES_GANomaly(nn.Module):
             main.add_module(f'pyramid-{i}-bn-{out_feat}', nn.BatchNorm2d(out_feat))
             main.add_module(f'pyramid-{i}-lrelu-{out_feat}', nn.LeakyReLU(0.2, inplace=False))
             main.add_module(f'pyramid-{i}-resblock-{out_feat}', ResidualSEBlock(out_feat))
+            for j in range(self.extra_res):
+                main.add_module(f'pyramid-{i}-resblock{j+1}', ResidualSEBlock(out_feat))
             
             current_channels = out_feat
             current_isize //= 2
@@ -145,11 +147,11 @@ class SelfAttention(nn.Module):
         return out
     
 class Decoder_RES_GANomaly(nn.Module):
-    def __init__(self, isize, nz, nc, ngf_deepest, ngpu=0):
+    def __init__(self, isize, nz, nc, ngf_deepest, ngpu=0, extra_res: int = 0):
         super(Decoder_RES_GANomaly, self).__init__()
         self.ngpu = ngpu
         self.isize = isize # Target output size
-
+        self.extra_res = extra_res
         main = nn.Sequential()
 
         current_channels = nz
@@ -167,14 +169,16 @@ class Decoder_RES_GANomaly(nn.Module):
         while current_csize < self.isize // 2:
             target_channels_block_up = current_channels // 2 # Halve channels
             if target_channels_block_up < nc*2 and current_csize*2 < self.isize//2 : # Ensure we don't go below a reasonable minimum before the last two stages
-
-                 pass
+                raise ValueError("Yo man you did something wrong!!!!")
 
             main.add_module(f'pyramid-{up_block_idx}-{current_channels}to{target_channels_block_up}-convt',
                             nn.ConvTranspose2d(current_channels, target_channels_block_up, kernel_size=4, stride=2, padding=1, bias=False))
             main.add_module(f'pyramid-{up_block_idx}-{target_channels_block_up}-batchnorm', nn.BatchNorm2d(target_channels_block_up))
             main.add_module(f'pyramid-{up_block_idx}-{target_channels_block_up}-relu', nn.ReLU(False))
-            # Add Self-Attention as per paper
+            for j in range(self.extra_res):                       # <─ new
+                main.add_module(f'pyramid-{up_block_idx}'
+                                f'-{target_channels_block_up}-resblock{j}',
+                                ResidualSEBlock(target_channels_block_up))
             main.add_module(f'pyramid-{up_block_idx}-{target_channels_block_up}-selfattention', SelfAttention(target_channels_block_up))
             
             current_channels = target_channels_block_up
@@ -270,9 +274,9 @@ class NetG_RES_GANomaly(nn.Module):
         
         print(f"NetG_RES_GANomaly: Calculated ngf_deepest for decoder: {ngf_deepest_calculated}")
 
-        self.encoder1 = Encoder_RES_GANomaly(isize=opt.isize, nz=opt.nz, nc=opt.nc, ngf=opt.ngf, ngpu=opt.ngpu)
-        self.decoder = Decoder_RES_GANomaly(isize=opt.isize, nz=opt.nz, nc=opt.nc, ngf_deepest=ngf_deepest_calculated, ngpu=opt.ngpu)
-        self.encoder2 = Encoder_RES_GANomaly(isize=opt.isize, nz=opt.nz, nc=opt.nc, ngf=opt.ngf, ngpu=opt.ngpu)
+        self.encoder1 = Encoder_RES_GANomaly(isize=opt.isize, nz=opt.nz, nc=opt.nc, ngf=opt.ngf, ngpu=opt.ngpu, extra_res=opt.extra_res)
+        self.decoder = Decoder_RES_GANomaly(isize=opt.isize, nz=opt.nz, nc=opt.nc, ngf_deepest=ngf_deepest_calculated, ngpu=opt.ngpu, extra_res=opt.extra_res)
+        self.encoder2 = Encoder_RES_GANomaly(isize=opt.isize, nz=opt.nz, nc=opt.nc, ngf=opt.ngf, ngpu=opt.ngpu, extra_res=opt.extra_res)
 
     def forward(self, x):
         latent_i = self.encoder1(x)
@@ -295,7 +299,7 @@ class NetG_MultiDecoder_RES_GANomaly(nn.Module):
         
         self.encoder = Encoder_RES_GANomaly(
             isize=_isize, nz=_nz, nc=_nc,
-            ngf=_ngf, ngpu=_ngpu, add_final_conv=True
+            ngf=_ngf, ngpu=_ngpu, add_final_conv=True, extra_res=opt.extra_res
         )
 
         with torch.no_grad():
@@ -305,7 +309,7 @@ class NetG_MultiDecoder_RES_GANomaly(nn.Module):
         self.decoders = nn.ModuleList([
             Decoder_RES_GANomaly(
                 isize=_isize, nz=_nz, nc=_nc,
-                ngf_deepest=deepest_c, ngpu=_ngpu
+                ngf_deepest=deepest_c, ngpu=_ngpu, extra_res=opt.extra_res
             )
             for _ in range(n_branches)
         ])

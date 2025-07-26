@@ -20,7 +20,6 @@ from loss import (
     LossWeights,
     classifier_loss_danogan
 )
-from evaluate import evaluate
 import tempfile
 
 def atomic_save(obj: Any, path: str):

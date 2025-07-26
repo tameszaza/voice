@@ -4,7 +4,7 @@ import numpy as np
 torch_import = True
 import torch
 from torch.utils.data import Dataset, DataLoader
-
+import torch.nn as nn
 from RES_GANomaly_model import RES_MGanomaly
 # Enables detailed gradient anomaly detection if needed
 #torch.autograd.set_detect_anomaly(True)
@@ -65,20 +65,22 @@ def build_option_parser():
         fromfile_prefix_chars='@'
     )
     p.add_argument("--data_path", type=str,
-                default="ResData/wavefake32_split/train/fake",
+                default="ResData/wavefake128_2048split/train/fake",
                 help="Either a .npy file or a directory of cluster*.npy")
     #p.add_argument("--data_root", type=str, default="ResData")
     p.add_argument("--outf", type=str, default="output_ResMGAN")
-    p.add_argument("--name", type=str, default="Fi64z100")
+    p.add_argument("--name", type=str, default="Fi128z100")
     p.add_argument("--n_branches", type=int, default=None,
                help="Number of decoder branches; "
                     "if omitted and data_path is a dir, auto-infers.")
-    p.add_argument("--batchsize", type=int, default=1024)
-    p.add_argument("--isize", type=int, default=32)
+    p.add_argument("--batchsize", type=int, default=45)
+    p.add_argument("--isize", type=int, default=128)
     p.add_argument("--nc", type=int, default=1)
     p.add_argument("--nz", type=int, default=100)
     p.add_argument("--ngf", type=int, default=64)
     p.add_argument("--ndf", type=int, default=128)
+    p.add_argument("--extra_res", type=int, default=4,
+               help="Extra ResidualSEBlocks per down/upsampling stage")
     p.add_argument("--lr_g", type=float, default=1e-3)
     p.add_argument("--lr_d", type=float, default=1e-3)
     p.add_argument("--lr_cls", type=float, default=1e-3)
@@ -116,6 +118,9 @@ def _resolve_ckpt_path(opt, tag: str) -> str:
     ckpt_dir = os.path.join(opt.outf, opt.name, "checkpoints")
     return os.path.join(ckpt_dir, f"checkpoint_{tag}.pth")
 
+def count_params(module: nn.Module) -> int:
+    return sum(p.numel() for p in module.parameters() if p.requires_grad)
+
 
 # --------------------------------------------------------------------------
 # Main
@@ -135,7 +140,7 @@ def main():
         train_ds,
         batch_size=opt.batchsize,
         shuffle=True,
-        num_workers=4,
+        num_workers=15,
         pin_memory=True,
     )
     dataloader = {"train": train_loader}
@@ -148,7 +153,9 @@ def main():
             model.load(ckpt_path, strict=True)
         except FileNotFoundError as e:
             print(f"[!] Resume failed: {e}.  Starting from scratch.")
-
+    print(f"[Params] netG       : {count_params(model.netg):,} parameters")
+    print(f"[Params] netD       : {count_params(model.netd):,} parameters")
+    print(f"[Params] classifier : {count_params(model.branch_clf):,} parameters")
     model.train_periodic_save()
 
 
