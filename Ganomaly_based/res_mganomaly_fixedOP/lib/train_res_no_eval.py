@@ -68,18 +68,18 @@ def build_option_parser():
                 default="ResData/wavefake128_2048split/train/fake",
                 help="Either a .npy file or a directory of cluster*.npy")
     #p.add_argument("--data_root", type=str, default="ResData")
-    p.add_argument("--outf", type=str, default="output_ResMGAN_fixed")
-    p.add_argument("--name", type=str, default="Fi128z100extra6")
+    p.add_argument("--outf", type=str, default="output_ResMGAN_OPTfixed")
+    p.add_argument("--name", type=str, default="Fi128z100extra4")
     p.add_argument("--n_branches", type=int, default=None,
                help="Number of decoder branches; "
                     "if omitted and data_path is a dir, auto-infers.")
-    p.add_argument("--batchsize", type=int, default=34)
+    p.add_argument("--batchsize", type=int, default=32)
     p.add_argument("--isize", type=int, default=128)
     p.add_argument("--nc", type=int, default=1)
     p.add_argument("--nz", type=int, default=100)
     p.add_argument("--ngf", type=int, default=64)
     p.add_argument("--ndf", type=int, default=128)
-    p.add_argument("--extra_res", type=int, default=6,
+    p.add_argument("--extra_res", type=int, default=4,
                help="Extra ResidualSEBlocks per down/upsampling stage")
     p.add_argument("--lr_g", type=float, default=1e-5)
     p.add_argument("--lr_d", type=float, default=1e-4)
@@ -88,7 +88,8 @@ def build_option_parser():
     p.add_argument("--device", type=str, default="cuda:0")
     p.add_argument("--ngpu",      type=int, default=1, help="Number of GPUs to use (for DataParallel)")
     p.add_argument("--metric", type=str, default="roc")
-    p.add_argument("--tb_freq", type=int, default=10)  # batches between TB writes
+    p.add_argument("--tb_freq", type=int, default=100)  # batches between TB writes
+    p.add_argument("--tb_branch_freq", type=int, default=1000)  # batches between TB writes
     p.add_argument("--manualseed", type=int, default=-1)
     p.add_argument("--w_adv", type=float, default=1.0,  help="Weight on adversarial loss (Eq.12)")
     p.add_argument("--w_con", type=float, default=50.0, help="Weight on latent consistency loss")
@@ -103,7 +104,7 @@ def build_option_parser():
     #                help="Path to a pretrained generator (.pth).")
     # p.add_argument("--netd_ckpt", type=str, default="output_vanillaResGAN/ResGanNormRerun/checkpoints/netD_epoch100.pth",
     #                help="Path to a pretrained discriminator (.pth).")
-    p.add_argument("--resume", type=str, default="epoch170",
+    p.add_argument("--resume", type=str, default=None,
                    help="Checkpoint tag to resume from, e.g. 'latest' or 'epoch20'.")
     return p
 
